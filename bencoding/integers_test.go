@@ -15,8 +15,10 @@ func (Integer) Generate(r *rand.Rand, size int) reflect.Value {
 
 func Test_IntegerEncodeDecode(t *testing.T) {
 	property := func(i Integer) bool {
-		e := new(Integer)
-		return e.Decode(i.Encode()) == nil && *e == i
+		n := new(Integer)
+		e := i.Encode()
+		pos, err := n.Decode(e, 0)
+		return err == nil && n.Equal(&i) && pos == len(e)-1
 	}
 
 	if err := quick.Check(property, nil); err != nil {
@@ -26,19 +28,26 @@ func Test_IntegerEncodeDecode(t *testing.T) {
 
 func Test_IntegerDecodeErrors(t *testing.T) {
 	i := new(Integer)
-	err := i.Decode([]byte("0e"))
+	pos, err := i.Decode([]byte("0e"), 0)
 	assert.NotNil(t, err)
+	assert.Equal(t, 0, pos)
 	assert.Equal(t, "Failed to decode bencoding.Integer: failed to parse integer, 'i' not found", err.Error())
 
-	err = i.Decode([]byte("i0"))
+	pos, err = i.Decode([]byte("i0"), 0)
 	assert.NotNil(t, err)
+	assert.Equal(t, 0, pos)
 	assert.Equal(t, "Failed to decode bencoding.Integer: failed to parse integer, 'e' not found", err.Error())
 
-	err = i.Decode([]byte("i023e"))
+	pos, err = i.Decode([]byte("i023e"), 0)
 	assert.NotNil(t, err)
+	assert.Equal(t, 0, pos)
 	assert.Equal(t, "Failed to decode bencoding.Integer: invalid integer, cannot have an integer format prefixed with 0 (i0xxxxx...e)", err.Error())
 
-	err = i.Decode([]byte("i0e"))
+	pos, err = i.Decode([]byte("i0e"), 0)
 	assert.Nil(t, err)
 	assert.Equal(t, Integer(0), *i)
+
+	pos, err = i.Decode([]byte("i23e"), 0)
+	assert.Nil(t, err)
+	assert.Equal(t, Integer(23), *i)
 }

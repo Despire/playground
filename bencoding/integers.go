@@ -9,38 +9,56 @@ import (
 // Integer represents a decoded integer from the Bencoding format.
 type Integer int64
 
-func (i *Integer) Decode(b []byte) error {
-	if b[0] != byte(integerBegin) {
-		return &DecodingError{
+func (i *Integer) Equal(o Value) bool {
+	rv := reflect.ValueOf(o)
+	if rv.Type() != reflect.TypeFor[*Integer]() {
+		return false
+	}
+	if (rv.IsNil() && i != nil) || (i == nil && !rv.IsNil()) {
+		return false
+	}
+	if i == nil {
+		return true
+	}
+
+	other := o.(*Integer)
+	return *other == *i
+}
+
+func (i *Integer) Decode(src []byte, position int) (int, error) {
+	if src[position] != byte(integerBegin) {
+		return 0, &DecodingError{
 			typ: reflect.TypeOf(*i),
 			msg: "failed to parse integer, 'i' not found",
 		}
 	}
-	if b[len(b)-1] != byte(valueEnd) {
-		return &DecodingError{
+
+	start := position + 1
+	end, err := advanceUntil(src, start, valueEnd)
+	if err != nil {
+		return 0, &DecodingError{
 			typ: reflect.TypeOf(*i),
 			msg: "failed to parse integer, 'e' not found",
 		}
 	}
-	b = b[1:]
-	b = b[:len(b)-1]
-	if len(b) > 1 && b[0] == '0' {
-		return &DecodingError{
+
+	if end-start > 1 && src[start] == '0' {
+		return 0, &DecodingError{
 			typ: reflect.TypeOf(*i),
 			msg: "invalid integer, cannot have an integer format prefixed with 0 (i0xxxxx...e)",
 		}
 	}
 
-	ii, err := strconv.ParseInt(string(b), 10, int(unsafe.Sizeof(*i))*8)
+	ii, err := strconv.ParseInt(string(src[start:end]), 10, int(unsafe.Sizeof(*i))*8)
 	if err != nil {
-		return &DecodingError{
+		return 0, &DecodingError{
 			typ: reflect.TypeOf(*i),
 			msg: "failed to parse integer: " + err.Error(),
 		}
 	}
 
 	*i = Integer(ii)
-	return nil
+	return end, nil
 }
 
 func (i *Integer) Encode() []byte {

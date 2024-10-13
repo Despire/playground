@@ -24,8 +24,10 @@ func (ByteString) Generate(r *rand.Rand, size int) reflect.Value {
 
 func Test_ByteStringEncodeDecode(t *testing.T) {
 	property := func(b ByteString) bool {
-		e := new(ByteString)
-		return e.Decode(b.Encode()) == nil && *e == b
+		n := new(ByteString)
+		e := b.Encode()
+		pos, err := n.Decode(e, 0)
+		return err == nil && n.Equal(&b) && pos == len(e)-1
 	}
 
 	if err := quick.Check(property, nil); err != nil {
@@ -35,11 +37,21 @@ func Test_ByteStringEncodeDecode(t *testing.T) {
 
 func Test_ByteStringDecodeErrors(t *testing.T) {
 	i := new(ByteString)
-	err := i.Decode([]byte("1t"))
+	pos, err := i.Decode([]byte("1t"), 0)
 	assert.NotNil(t, err)
+	assert.Equal(t, 0, pos)
 	assert.Equal(t, "Failed to decode bencoding.ByteString: expected separator ':' while parsing string, but did not found", err.Error())
 
-	err = i.Decode([]byte("t:t"))
+	pos, err = i.Decode([]byte("t:t"), 0)
 	assert.NotNil(t, err)
+	assert.Equal(t, 0, pos)
 	assert.Equal(t, "Failed to decode bencoding.ByteString: failed to decode length of the string: strconv.ParseInt: parsing \"t\": invalid syntax", err.Error())
+
+	pos, err = i.Decode([]byte("0:"), 0)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, pos)
+
+	pos, err = i.Decode([]byte("1:t"), 0)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, pos)
 }
