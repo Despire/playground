@@ -1,12 +1,13 @@
 package bencoding
 
 import (
-	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
 	"testing/quick"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func (ByteString) Generate(r *rand.Rand, size int) reflect.Value {
@@ -21,14 +22,24 @@ func (ByteString) Generate(r *rand.Rand, size int) reflect.Value {
 	return reflect.ValueOf(bs)
 }
 
-func TestEncodeDecode(t *testing.T) {
+func Test_ByteStringEncodeDecode(t *testing.T) {
 	property := func(b ByteString) bool {
 		e := new(ByteString)
-		t.Log(fmt.Sprintf("testing: %s", b))
-		return e.decode(b.encode()) == nil && *e == b
+		return e.Decode(b.Encode()) == nil && *e == b
 	}
 
 	if err := quick.Check(property, nil); err != nil {
 		t.Errorf("byte_string encode -> decode failed: %v", err)
 	}
+}
+
+func Test_ByteStringDecodeErrors(t *testing.T) {
+	i := new(ByteString)
+	err := i.Decode([]byte("1t"))
+	assert.NotNil(t, err)
+	assert.Equal(t, "Failed to decode bencoding.ByteString: expected separator ':' while parsing string, but did not found", err.Error())
+
+	err = i.Decode([]byte("t:t"))
+	assert.NotNil(t, err)
+	assert.Equal(t, "Failed to decode bencoding.ByteString: failed to decode length of the string: strconv.ParseInt: parsing \"t\": invalid syntax", err.Error())
 }

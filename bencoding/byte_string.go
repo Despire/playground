@@ -2,51 +2,39 @@ package bencoding
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
 	"reflect"
 	"strconv"
 )
 
-var (
-	// errStringSeparatorNotFound is returned when unmarshalling a byte string contains invalid format
-	// that has no separator character ':'.
-	errStringSeparatorNotFound = errors.New("expected string separator ':', but did not found")
-	// errStringLengthInvalid is returned when the string length denoting the contents of the bytes string
-	// failed to be parsed correctly.
-	errStringLengthInvalid = errors.New("failed to decode string lenght")
-)
-
-const (
-	// stringSeparator is the delimiter between the string length and the actual contents of a string.
-	stringSeparator byte = ':'
-)
-
-// ByteString represents a bendecoded string.
+// ByteString represents a decoded byte string form the Bencoding format.
 type ByteString string
 
-var byteStringType = reflect.TypeFor[ByteString]()
-
-func (s *ByteString) decode(b []byte) error {
-	before, after, found := bytes.Cut(b, []byte{stringSeparator})
+func (s *ByteString) Decode(b []byte) error {
+	before, after, found := bytes.Cut(b, []byte{byte(valueDelimiter)})
 	if !found {
-		return errStringSeparatorNotFound
+		return &DecodingError{
+			typ: reflect.TypeOf(*s),
+			msg: "expected separator ':' while parsing string, but did not found",
+		}
 	}
 
 	l, err := strconv.ParseInt(string(before), 10, 64)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errStringLengthInvalid, err)
+		return &DecodingError{
+			typ: reflect.TypeOf(*s),
+			msg: "failed to decode length of the string: " + err.Error(),
+		}
 	}
 
 	*s = ByteString(after[:l])
 	return nil
 }
 
-func (s *ByteString) encode() []byte {
+func (s *ByteString) Encode() []byte {
 	l := strconv.Itoa(len(*s))
 
 	buffer := make([]byte, len(l)+1+len(*s))
-	copy(buffer[:len(l)], []byte(l))
+	copy(buffer[:len(l)], l)
 
 	buffer[len(l)] = ':'
 	copy(buffer[len(l)+1:], *s)
