@@ -12,14 +12,6 @@ type ByteString string
 func (s *ByteString) Type() Type      { return ByteStringType }
 func (s *ByteString) Literal() string { return fmt.Sprintf("%d:%s", len(*s), *s) }
 
-func (s *ByteString) equal(o Value) bool {
-	if o.Type() != s.Type() {
-		return false
-	}
-	other := o.(*ByteString)
-	return *other == *s
-}
-
 func (s *ByteString) Decode(src []byte, position int) (int, error) {
 	delim, err := advanceUntil(src, position, valueDelimiter)
 	if err != nil {

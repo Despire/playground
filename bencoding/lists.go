@@ -24,27 +24,6 @@ func (l *List) Literal() string {
 	return b.String()
 }
 
-func (l *List) equal(o Value) bool {
-	if l.Type() != o.Type() {
-		return false
-	}
-
-	other := o.(*List)
-	if len(*other) != len(*l) {
-		return false
-	}
-
-	for i := range *l {
-		cv := (*l)[i]
-		ov := (*other)[i]
-		if cv.Type() != ov.Type() || cv.Literal() != ov.Literal() {
-			return false
-		}
-	}
-
-	return true
-}
-
 func (l *List) Decode(src []byte, position int) (int, error) {
 	if src[position] != byte(listBegin) {
 		return 0, &DecodingError{

@@ -10,6 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func (s *ByteString) equal(o Value) bool {
+	if o.Type() != s.Type() {
+		return false
+	}
+	other := o.(*ByteString)
+	return *other == *s
+}
+
 func (ByteString) Generate(r *rand.Rand, size int) reflect.Value {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 

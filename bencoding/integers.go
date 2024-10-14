@@ -13,14 +13,6 @@ type Integer int64
 func (i *Integer) Type() Type      { return IntegerType }
 func (i *Integer) Literal() string { return fmt.Sprintf("i%ve", *i) }
 
-func (i *Integer) equal(o Value) bool {
-	if i.Type() != o.Type() {
-		return false
-	}
-	other := o.(*Integer)
-	return *other == *i
-}
-
 func (i *Integer) Decode(src []byte, position int) (int, error) {
 	if src[position] != byte(integerBegin) {
 		return 0, &DecodingError{

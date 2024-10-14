@@ -9,6 +9,27 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func (l *List) equal(o Value) bool {
+	if l.Type() != o.Type() {
+		return false
+	}
+
+	other := o.(*List)
+	if len(*other) != len(*l) {
+		return false
+	}
+
+	for i := range *l {
+		cv := (*l)[i]
+		ov := (*other)[i]
+		if cv.Type() != ov.Type() || cv.Literal() != ov.Literal() {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (List) Generate(r *rand.Rand, size int) reflect.Value {
 	var l List
 

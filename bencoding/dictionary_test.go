@@ -10,6 +10,29 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func (d *Dictionary) equal(o Value) bool {
+	if d.Type() != o.Type() {
+		return false
+	}
+
+	other := o.(*Dictionary)
+	if len(other.Dict) != len(d.Dict) {
+		return false
+	}
+
+	for k, v := range d.Dict {
+		o, exists := (other.Dict)[k]
+		if !exists {
+			return false
+		}
+		if o.Type() != v.Type() && o.Literal() != v.Literal() {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (Dictionary) Generate(r *rand.Rand, size int) reflect.Value {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 

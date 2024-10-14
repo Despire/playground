@@ -22,37 +22,14 @@ func (d *Dictionary) Literal() string {
 	if d != nil {
 		k := slices.Collect(maps.Keys(d.Dict))
 		slices.Sort(k)
-		for k, v := range d.Dict {
+		for _, k := range k {
 			b.WriteString(fmt.Sprintf("%d:%s", len(k), k))
-			b.WriteString(v.Literal())
+			b.WriteString(d.Dict[k].Literal())
 		}
 	}
 	b.WriteByte(byte(valueEnd))
 
 	return b.String()
-}
-
-func (d *Dictionary) equal(o Value) bool {
-	if d.Type() != o.Type() {
-		return false
-	}
-
-	other := o.(*Dictionary)
-	if len(other.Dict) != len(d.Dict) {
-		return false
-	}
-
-	for k, v := range d.Dict {
-		o, exists := (other.Dict)[k]
-		if !exists {
-			return false
-		}
-		if o.Type() != v.Type() && o.Literal() != v.Literal() {
-			return false
-		}
-	}
-
-	return true
 }
 
 func (d *Dictionary) Decode(src []byte, position int) (int, error) {

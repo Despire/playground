@@ -12,7 +12,7 @@ func Decode(src io.Reader) (Value, error) {
 	}
 
 	if len(b) == 0 {
-		return nil, nil
+		return nil, errors.New("no bencoded value in input")
 	}
 
 	v := nextValue(b[0])

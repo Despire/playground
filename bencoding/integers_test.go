@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func (i *Integer) equal(o Value) bool {
+	if i.Type() != o.Type() {
+		return false
+	}
+	other := o.(*Integer)
+	return *other == *i
+}
+
 func (Integer) Generate(r *rand.Rand, size int) reflect.Value {
 	return reflect.ValueOf(Integer(r.Intn(1000) + 1))
 }
