@@ -25,9 +25,9 @@ func (ByteString) Generate(r *rand.Rand, size int) reflect.Value {
 func Test_ByteStringEncodeDecode(t *testing.T) {
 	property := func(b ByteString) bool {
 		n := new(ByteString)
-		e := b.Encode()
-		pos, err := n.Decode(e, 0)
-		return err == nil && n.Equal(&b) && pos == len(e)-1
+		e := b.Literal()
+		pos, err := n.Decode([]byte(e), 0)
+		return err == nil && n.equal(&b) && pos == len(e)-1
 	}
 
 	if err := quick.Check(property, nil); err != nil {

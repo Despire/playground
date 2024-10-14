@@ -2,21 +2,31 @@ package bencoding
 
 import (
 	"reflect"
+	"strings"
 )
 
 // List is a grouping of Bencoded values.
 type List []Value
 
-func (l *List) Equal(o Value) bool {
-	rv := reflect.ValueOf(o)
-	if rv.Type() != reflect.TypeFor[*List]() {
-		return false
+func (l *List) Type() Type { return ListType }
+
+func (l *List) Literal() string {
+	b := &strings.Builder{}
+
+	b.WriteByte(byte(listBegin))
+	if l != nil {
+		for _, v := range *l {
+			b.WriteString(v.Literal())
+		}
 	}
-	if (rv.IsNil() && l != nil) || (l == nil && !rv.IsNil()) {
+	b.WriteByte(byte(valueEnd))
+
+	return b.String()
+}
+
+func (l *List) equal(o Value) bool {
+	if l.Type() != o.Type() {
 		return false
-	}
-	if l == nil {
-		return true
 	}
 
 	other := o.(*List)
@@ -25,7 +35,9 @@ func (l *List) Equal(o Value) bool {
 	}
 
 	for i := range *l {
-		if !(*l)[i].Equal((*other)[i]) {
+		cv := (*l)[i]
+		ov := (*other)[i]
+		if cv.Type() != ov.Type() || cv.Literal() != ov.Literal() {
 			return false
 		}
 	}
@@ -41,63 +53,36 @@ func (l *List) Decode(src []byte, position int) (int, error) {
 		}
 	}
 
-	var err error
 	for {
 		position += 1
+		var d Decoder
 
 		switch src[position] {
 		case byte(valueEnd):
 			return position, nil
 		case byte(listBegin):
-			n := List{}
-			position, err = n.Decode(src, position)
-			if err != nil {
-				return 0, &DecodingError{
-					typ: reflect.TypeOf(*l),
-					msg: "failed to decode list element of type 'List': " + err.Error(),
-				}
-			}
-			*l = append(*l, &n)
+			d = &List{}
 		case byte(dictionaryBegin):
-			// TODO: fix me
-			panic("fix me")
+			d = &Dictionary{}
 		case byte(integerBegin):
-			n := new(Integer)
-			position, err = n.Decode(src, position)
-			if err != nil {
-				return 0, &DecodingError{
-					typ: reflect.TypeOf(*l),
-					msg: "failed to decode list element of type 'Integer': " + err.Error(),
-				}
-			}
-
-			*l = append(*l, n)
+			d = new(Integer)
 		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-			n := new(ByteString)
-			position, err = n.Decode(src, position)
-			if err != nil {
-				return 0, &DecodingError{
-					typ: reflect.TypeOf(*l),
-					msg: "failed to decode list element of type 'ByteString': " + err.Error(),
-				}
-			}
-
-			*l = append(*l, n)
+			d = new(ByteString)
 		default:
 			return 0, &DecodingError{
 				typ: reflect.TypeOf(*l),
 				msg: "unrecognized token: " + string(src[position]),
 			}
 		}
-	}
-}
 
-func (l *List) Encode() []byte {
-	buffer := make([]byte, 0, 2)
-	buffer = append(buffer, byte(listBegin))
-	for _, v := range *l {
-		buffer = append(buffer, v.Encode()...)
+		var err error
+		position, err = d.Decode(src, position)
+		if err != nil {
+			return 0, &DecodingError{
+				typ: reflect.TypeOf(*l),
+				msg: "failed to decode list item of type '" + reflect.TypeOf(d).String() + "': " + err.Error(),
+			}
+		}
+		*l = append(*l, d.(Value))
 	}
-	buffer = append(buffer, byte(valueEnd))
-	return buffer
 }

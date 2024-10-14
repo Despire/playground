@@ -2,8 +2,10 @@ package bencoding
 
 import "errors"
 
+// ErrEoF is returned when all of the input has been processed and no more tokens are left.
 var ErrEOF = errors.New("end of file")
 
+// Token represents possible tokens found in a Bencoding.
 type Token byte
 
 const (

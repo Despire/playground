@@ -6,7 +6,6 @@ import (
 	"testing"
 	"testing/quick"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,13 +49,9 @@ func (List) Generate(r *rand.Rand, size int) reflect.Value {
 func Test_ListEncodeDecode(t *testing.T) {
 	property := func(l List) bool {
 		n := new(List)
-		e := l.Encode()
-		pos, err := n.Decode(e, 0)
-		if !n.Equal(&l) {
-			diff := cmp.Diff(&l, n)
-			panic(diff)
-		}
-		return err == nil && n.Equal(&l) && pos == len(e)-1
+		e := l.Literal()
+		pos, err := n.Decode([]byte(e), 0)
+		return err == nil && n.equal(&l) && pos == len(e)-1
 	}
 
 	if err := quick.Check(property, nil); err != nil {
@@ -83,7 +78,7 @@ func Test_ListDecodingErrors(t *testing.T) {
 	pos, err = new(List).Decode([]byte("l0*e"), 0)
 	assert.NotNil(t, err)
 	assert.Equal(t, 0, pos)
-	assert.Equal(t, "Failed to decode bencoding.List: failed to decode list element of type 'ByteString': Failed to decode bencoding.ByteString: expected separator ':' while parsing string, but did not found", err.Error())
+	assert.Equal(t, "Failed to decode bencoding.List: failed to decode list item of type '*bencoding.ByteString': Failed to decode bencoding.ByteString: expected separator ':' while parsing string, but did not found", err.Error())
 
 	pos, err = new(List).Decode([]byte("l59:qKMSbDTqRpgfIzWxYVREfqBFUydVVFcBaVnkoROEkDcSUNcaIbCOUxPLOAti182ei218ei453ei352e62:qPQSEKHjusCUzhBELRTKrZrcXLFUhRnFOXPNDWcMqGRhVFMGmPbtKNpkTlRGKMi11ei207e90:DtSNpwxBDUWVkVZeJHEeEyiSDjrRZPkOadEXinjglMCyzyHptaRKuKgNQidFbQaaudiLPEMclEadFXlVvcffQremcDi321ei413ei433ee"), 0)
 	assert.Nil(t, err)
@@ -98,7 +93,7 @@ func Test_ListEqual(t *testing.T) {
 	l1 := List{}
 	l2 := List{}
 
-	assert.True(t, l1.Equal(&l2))
+	assert.True(t, l1.equal(&l2))
 
 	l1 = List{
 		ptrOf(Integer(123)),
@@ -120,7 +115,7 @@ func Test_ListEqual(t *testing.T) {
 		},
 		&List{},
 	}
-	assert.True(t, l1.Equal(&l2))
+	assert.True(t, l1.equal(&l2))
 
 }
 

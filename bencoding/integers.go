@@ -1,6 +1,7 @@
 package bencoding
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 	"unsafe"
@@ -9,18 +10,13 @@ import (
 // Integer represents a decoded integer from the Bencoding format.
 type Integer int64
 
-func (i *Integer) Equal(o Value) bool {
-	rv := reflect.ValueOf(o)
-	if rv.Type() != reflect.TypeFor[*Integer]() {
-		return false
-	}
-	if (rv.IsNil() && i != nil) || (i == nil && !rv.IsNil()) {
-		return false
-	}
-	if i == nil {
-		return true
-	}
+func (i *Integer) Type() Type      { return IntegerType }
+func (i *Integer) Literal() string { return fmt.Sprintf("i%ve", *i) }
 
+func (i *Integer) equal(o Value) bool {
+	if i.Type() != o.Type() {
+		return false
+	}
 	other := o.(*Integer)
 	return *other == *i
 }
@@ -59,13 +55,4 @@ func (i *Integer) Decode(src []byte, position int) (int, error) {
 
 	*i = Integer(ii)
 	return end, nil
-}
-
-func (i *Integer) Encode() []byte {
-	c := strconv.Itoa(int(*i))
-	buffer := make([]byte, len(c)+2)
-	buffer[0] = byte(integerBegin)
-	copy(buffer[1:], c)
-	buffer[len(buffer)-1] = byte(valueEnd)
-	return buffer
 }

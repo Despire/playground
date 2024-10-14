@@ -1,6 +1,7 @@
 package bencoding
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 )
@@ -8,18 +9,13 @@ import (
 // ByteString represents a decoded byte string form the Bencoding format.
 type ByteString string
 
-func (s *ByteString) Equal(o Value) bool {
-	rv := reflect.ValueOf(o)
-	if rv.Type() != reflect.TypeFor[*ByteString]() {
-		return false
-	}
-	if (rv.IsNil() && s != nil) || (s == nil && !rv.IsNil()) {
-		return false
-	}
-	if s == nil {
-		return true
-	}
+func (s *ByteString) Type() Type      { return ByteStringType }
+func (s *ByteString) Literal() string { return fmt.Sprintf("%d:%s", len(*s), *s) }
 
+func (s *ByteString) equal(o Value) bool {
+	if o.Type() != s.Type() {
+		return false
+	}
 	other := o.(*ByteString)
 	return *other == *s
 }
@@ -45,15 +41,4 @@ func (s *ByteString) Decode(src []byte, position int) (int, error) {
 	end := start + int(l)
 	*s = ByteString(src[start:end])
 	return end - 1, nil
-}
-
-func (s *ByteString) Encode() []byte {
-	l := strconv.Itoa(len(*s))
-
-	buffer := make([]byte, len(l)+1+len(*s))
-	copy(buffer[:len(l)], l)
-
-	buffer[len(l)] = ':'
-	copy(buffer[len(l)+1:], *s)
-	return buffer
 }

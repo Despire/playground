@@ -16,9 +16,9 @@ func (Integer) Generate(r *rand.Rand, size int) reflect.Value {
 func Test_IntegerEncodeDecode(t *testing.T) {
 	property := func(i Integer) bool {
 		n := new(Integer)
-		e := i.Encode()
-		pos, err := n.Decode(e, 0)
-		return err == nil && n.Equal(&i) && pos == len(e)-1
+		e := i.Literal()
+		pos, err := n.Decode([]byte(e), 0)
+		return err == nil && n.equal(&i) && pos == len(e)-1
 	}
 
 	if err := quick.Check(property, nil); err != nil {

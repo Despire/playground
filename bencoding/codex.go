@@ -4,15 +4,18 @@ import (
 	"reflect"
 )
 
-type Value interface {
-	Equal(o Value) bool
-	Encoder
-	Decoder
-}
+type Type string
 
-type Encoder interface {
-	// Encode encodes the value to its bencoded representation.
-	Encode() []byte
+const (
+	ByteStringType Type = "BYTE_STRING"
+	IntegerType         = "INTEGER"
+	ListType            = "LIST"
+	DictionaryType      = "DICTIONARY"
+)
+
+type Value interface {
+	Type() Type
+	Literal() string
 }
 
 type Decoder interface {
@@ -25,6 +28,4 @@ type DecodingError struct {
 	msg string
 }
 
-func (e *DecodingError) Error() string {
-	return "Failed to decode " + e.typ.String() + ": " + e.msg
-}
+func (e *DecodingError) Error() string { return "Failed to decode " + e.typ.String() + ": " + e.msg }
