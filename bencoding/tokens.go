@@ -1,6 +1,8 @@
 package bencoding
 
-import "errors"
+import (
+	"errors"
+)
 
 // ErrEoF is returned when all of the input has been processed and no more tokens are left.
 var ErrEOF = errors.New("end of file")
@@ -25,4 +27,19 @@ func advanceUntil(src []byte, curr int, tok Token) (int, error) {
 	}
 
 	return curr, nil
+}
+
+func nextValue(tok byte) Value {
+	switch tok {
+	case byte(listBegin):
+		return &List{}
+	case byte(dictionaryBegin):
+		return &Dictionary{}
+	case byte(integerBegin):
+		return new(Integer)
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return new(ByteString)
+	default:
+		return nil
+	}
 }

@@ -2,7 +2,9 @@ package bencoding
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -18,6 +20,8 @@ func (d *Dictionary) Literal() string {
 
 	b.WriteByte(byte(dictionaryBegin))
 	if d != nil {
+		k := slices.Collect(maps.Keys(d.Dict))
+		slices.Sort(k)
 		for k, v := range d.Dict {
 			b.WriteString(fmt.Sprintf("%d:%s", len(k), k))
 			b.WriteString(v.Literal())
@@ -65,13 +69,12 @@ func (d *Dictionary) Decode(src []byte, position int) (int, error) {
 
 	for {
 		position += 1
-
 		if src[position] == byte(valueEnd) {
 			return position, nil
 		}
 
-		k := new(ByteString)
 		var err error
+		k := new(ByteString)
 		position, err = k.Decode(src, position)
 		if err != nil {
 			return 0, &DecodingError{
@@ -81,30 +84,20 @@ func (d *Dictionary) Decode(src []byte, position int) (int, error) {
 		}
 
 		position += 1
-
-		var v Decoder
-		switch src[position] {
-		case byte(listBegin):
-			v = &List{}
-		case byte(dictionaryBegin):
-			v = &Dictionary{}
-		case byte(integerBegin):
-			v = new(Integer)
-		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-			v = new(ByteString)
-		default:
+		v := nextValue(src[position])
+		if v == nil {
 			return 0, &DecodingError{
 				typ: reflect.TypeOf(*d),
 				msg: "expected value, found unrecognized token: " + string(src[position]),
 			}
 		}
-		position, err = v.Decode(src, position)
+		position, err = v.(Decoder).Decode(src, position)
 		if err != nil {
 			return 0, &DecodingError{
 				typ: reflect.TypeOf(*d),
 				msg: "failed to decode list item of type '" + reflect.TypeOf(d).String() + "': " + err.Error(),
 			}
 		}
-		d.Dict[string(*k)] = v.(Value)
+		d.Dict[string(*k)] = v
 	}
 }

@@ -55,20 +55,13 @@ func (l *List) Decode(src []byte, position int) (int, error) {
 
 	for {
 		position += 1
-		var d Decoder
 
-		switch src[position] {
-		case byte(valueEnd):
+		if src[position] == byte(valueEnd) {
 			return position, nil
-		case byte(listBegin):
-			d = &List{}
-		case byte(dictionaryBegin):
-			d = &Dictionary{}
-		case byte(integerBegin):
-			d = new(Integer)
-		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-			d = new(ByteString)
-		default:
+		}
+
+		d := nextValue(src[position])
+		if d == nil {
 			return 0, &DecodingError{
 				typ: reflect.TypeOf(*l),
 				msg: "unrecognized token: " + string(src[position]),
@@ -76,7 +69,7 @@ func (l *List) Decode(src []byte, position int) (int, error) {
 		}
 
 		var err error
-		position, err = d.Decode(src, position)
+		position, err = d.(Decoder).Decode(src, position)
 		if err != nil {
 			return 0, &DecodingError{
 				typ: reflect.TypeOf(*l),
