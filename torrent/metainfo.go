@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -294,7 +295,7 @@ func infoCommon(key string, value bencoding.Value, info *Info, isMultiFile bool)
 		if !ok {
 			return fmt.Errorf("expected 'Pieces' to be of type ByteString but was %T", value)
 		}
-		info.Pieces = string(*l)
+		info.Pieces = hex.EncodeToString([]byte((*l)))
 		return nil
 	case "private":
 		l, ok := value.(*bencoding.Integer)
