@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -44,6 +45,12 @@ type (
 type Info struct {
 	*InfoSingleFile
 	*InfoMultiFile
+
+	Metadata struct {
+		// Hash is the SHA1 Hash of the value of the info key in the torrent file.
+		// Use this when communicating with the tracker.
+		Hash [20]byte
+	}
 
 	// Number of bytes in each piece.
 	PieceLength int64
@@ -116,6 +123,8 @@ func apply(key string, value bencoding.Value, info *MetaInfoFile) error {
 		if !ok {
 			return fmt.Errorf("expected 'Info' to be of type Dictionary but was %T", value)
 		}
+
+		info.Metadata.Hash = sha1.Sum([]byte(l.Literal()))
 
 		_, isMultiFile := l.Dict["files"]
 		for k, v := range l.Dict {
