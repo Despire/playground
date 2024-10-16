@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"path/filepath"
 	"time"
 
@@ -50,6 +49,7 @@ type Info struct {
 	PieceLength int64
 	// String consisting of the concatenation of all 20-byte SHA1 hash values,
 	// one per piece (byte string, i.e. not urlencoded).
+	// Is hexencoded for better readability.
 	Pieces string
 
 	// Optional
@@ -103,7 +103,7 @@ func From(bencoded io.Reader) (*MetaInfoFile, error) {
 	}
 
 	if err := validate(&info); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to validate torrent file: %w", err)
 	}
 
 	return &info, nil
@@ -310,6 +310,42 @@ func infoCommon(key string, value bencoding.Value, info *Info, isMultiFile bool)
 }
 
 func validate(i *MetaInfoFile) error {
-	log.Printf("Implement Me!")
+	if i.Announce == "" {
+		return errors.New("unspecified 'announce' in torrent file")
+	}
+	if i.InfoSingleFile == nil && i.InfoMultiFile == nil {
+		return errors.New("neither single file nor multi file mode specified")
+	}
+	if len(i.Info.Pieces) == 0 {
+		return errors.New("missing 'pieces' inside torrent file")
+	}
+	h, err := hex.DecodeString(i.Info.Pieces)
+	if err != nil {
+		return err
+	}
+	if len(h)%20 != 0 {
+		return errors.New("invalid 'pieces' value inside torrent file")
+	}
+	if i.InfoSingleFile != nil {
+		if i.InfoSingleFile.Name == "" {
+			return errors.New("missing 'name' for single file torrent")
+		}
+		if i.InfoSingleFile.Length == 0 {
+			return errors.New("missing 'length' for single file torrent")
+		}
+	}
+	if i.InfoMultiFile != nil {
+		if i.InfoMultiFile.Name == "" {
+			return errors.New("missing directory 'name' for multi file torrent")
+		}
+		for _, f := range i.InfoMultiFile.Files {
+			if f.Length == 0 {
+				return fmt.Errorf("missing 'length' inside %s for multi file torrent", i.InfoMultiFile.Name)
+			}
+			if len(f.Path) == 0 {
+				return fmt.Errorf("missing 'Path' inside %s for multi file torrent", i.InfoMultiFile.Name)
+			}
+		}
+	}
 	return nil
 }
