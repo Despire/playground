@@ -32,6 +32,12 @@ func TestFrom(t *testing.T) {
 			},
 			want: &MetaInfoFile{
 				Info: Info{
+					Metadata: struct {
+						Hash [20]byte
+					}{
+						Hash: [20]byte{0xe3, 0x7b, 0x64, 0xd8, 0x5c, 0xf4, 0xaa, 0x93, 0xe0, 0xec, 0x4a, 0xee, 0x2b, 0x44, 0x73, 0x5b,
+							0x7c, 0xb6, 0x39, 0x67},
+					},
 					InfoSingleFile: &InfoSingleFile{
 						Name:   "debian-12.7.0-arm64-netinst.iso",
 						Length: 551858176,
