@@ -1,8 +1,10 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"github.com/Despire/tinytorrent/bencoding"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,6 +31,7 @@ func New(ctx context.Context, torrent *torrent.MetaInfoFile, opts ...Option) (*P
 
 	c.logger = c.logger.With(slog.Group(c.id, slog.String("id", c.id)))
 
+	// TODO: rewrite this with new api in tracker.go
 	params := url.Values{
 		"info_hash": {string(torrent.Metadata.Hash[:])},
 		"peer_id":   {c.id},
@@ -53,16 +56,23 @@ func New(ctx context.Context, torrent *torrent.MetaInfoFile, opts ...Option) (*P
 	}
 	defer resp.Body.Close()
 
-	fmt.Println(resp.Status)
-	fmt.Println(resp.StatusCode)
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: implement me.
-	panic(string(body))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("request send to tracker at %s returned status code: %v, body: %s", req.URL.String(), resp.StatusCode, body)
+	}
+
+	v, err := bencoding.Decode(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	if typ := v.Type(); typ != bencoding.DictionaryType {
+		return nil, fmt.Errorf("expected response from tracker at %s to be a bencoded dictionary, got %s", req.URL.String(), typ)
+	}
 
 	return c, nil
 }
