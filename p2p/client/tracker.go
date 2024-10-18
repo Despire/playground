@@ -321,8 +321,6 @@ func DecodeTrackerResponse(src io.Reader, out *TrackerResponse) error {
 		}
 	}
 
-	// TODO: write tests.
-
 	return nil
 }
 

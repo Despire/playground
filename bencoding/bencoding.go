@@ -1,6 +1,7 @@
 package bencoding
 
 import (
+	"bytes"
 	"errors"
 	"io"
 )
@@ -11,6 +12,7 @@ func Decode(src io.Reader) (Value, error) {
 		return nil, err
 	}
 
+	b = bytes.TrimSpace(b)
 	if len(b) == 0 {
 		return nil, errors.New("no bencoded value in input")
 	}

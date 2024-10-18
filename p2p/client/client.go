@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/Despire/tinytorrent/bencoding"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 
+	"github.com/Despire/tinytorrent/bencoding"
 	"github.com/Despire/tinytorrent/torrent"
 )
 

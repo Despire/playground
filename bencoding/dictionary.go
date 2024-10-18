@@ -45,6 +45,12 @@ func (d *Dictionary) Decode(src []byte, position int) (int, error) {
 	}
 
 	for {
+		if position == len(src)-1 {
+			return 0, &DecodingError{
+				typ: reflect.TypeOf(*d),
+				msg: "un-proper formatted dictionary",
+			}
+		}
 		position += 1
 		if src[position] == byte(valueEnd) {
 			return position, nil

@@ -33,6 +33,12 @@ func (l *List) Decode(src []byte, position int) (int, error) {
 	}
 
 	for {
+		if position == len(src)-1 {
+			return 0, &DecodingError{
+				typ: reflect.TypeOf(*l),
+				msg: "un-proper formatted list",
+			}
+		}
 		position += 1
 
 		if src[position] == byte(valueEnd) {
