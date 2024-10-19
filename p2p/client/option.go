@@ -11,21 +11,21 @@ import (
 	"github.com/Despire/tinytorrent/p2p/client/internal/build"
 )
 
-type Option func(client *Peer)
+type Option func(client *Client)
 
 func WithPort(port int) Option {
-	return func(client *Peer) {
+	return func(client *Client) {
 		client.port = port
 	}
 }
 
 func WithLogger(logger *slog.Logger) Option {
-	return func(client *Peer) {
+	return func(client *Client) {
 		client.logger = logger
 	}
 }
 
-func defaults(c *Peer) {
+func defaults(c *Client) {
 	info := build.Information()
 
 	id := sha512.Sum512([]byte(info.ClientID + info.ClientVersion))

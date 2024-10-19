@@ -12,7 +12,7 @@ import (
 	"strconv"
 )
 
-func SetOptional[T any](val T) *T { return &val }
+func Optional[T any](val T) *T { return &val }
 
 type RequestParams struct {
 	// 20-byte SHA1 hash of the value of the info key from the Metainfo file.
