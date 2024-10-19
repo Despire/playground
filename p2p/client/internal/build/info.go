@@ -12,15 +12,15 @@ const ClientID = "MM"
 var (
 	// Date is set via ldflags on build.
 	// Must have the format time.DateOnly
-	Date string = "1970-01-01"
+	Date = "1970-01-01"
 
 	// Hash is set via ldflags on build.
 	// Can be arbitrary long.
-	Hash string = "unknown"
+	Hash = "unknown"
 
 	// Version is set via ldflags on build.
 	// Version is expected to be exactly 4 bytes long.
-	Version string = "DEBG"
+	Version = "DEBG"
 )
 
 // Info  wraps relevant information with

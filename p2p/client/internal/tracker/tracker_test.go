@@ -1,4 +1,4 @@
-package client
+package tracker_test
 
 import (
 	"bytes"
@@ -6,19 +6,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Despire/tinytorrent/p2p/client/internal/tracker"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestDecodeTrackerResponse(t *testing.T) {
 	type args struct {
 		src io.Reader
-		out *TrackerResponse
+		out *tracker.Response
 	}
 	tests := []struct {
 		name     string
 		args     args
 		wantErr  bool
-		validate func(t *testing.T, resp *TrackerResponse)
+		validate func(t *testing.T, resp *tracker.Response)
 	}{
 		{
 			name: "complete-response-example (Dictionary Model)",
@@ -26,10 +27,10 @@ func TestDecodeTrackerResponse(t *testing.T) {
 				src: strings.NewReader(`
 		d8:intervali1800e12:min intervali900e10:tracker id2:ab8:completei42e10:incompletei100e5:peersld7:peer id2:q12:ip12:192.168.1.104:porti6881eed7:peer id2:q22:ip12:192.168.1.114:porti6882eeee
 		`),
-				out: new(TrackerResponse),
+				out: new(tracker.Response),
 			},
 			wantErr: false,
-			validate: func(t *testing.T, resp *TrackerResponse) {
+			validate: func(t *testing.T, resp *tracker.Response) {
 				assert.NotNil(t, resp.Interval)
 				assert.Equal(t, int64(1800), *resp.Interval)
 
@@ -60,10 +61,10 @@ func TestDecodeTrackerResponse(t *testing.T) {
 				src: strings.NewReader(`
 		d14:failure reason26:Invalid info_hash providede
 		`),
-				out: new(TrackerResponse),
+				out: new(tracker.Response),
 			},
 			wantErr: false,
-			validate: func(t *testing.T, resp *TrackerResponse) {
+			validate: func(t *testing.T, resp *tracker.Response) {
 				assert.Equal(t, "Invalid info_hash provided", *resp.FailureReason)
 			},
 		},
@@ -71,10 +72,10 @@ func TestDecodeTrackerResponse(t *testing.T) {
 			name: "Warning Message",
 			args: args{
 				src: strings.NewReader(`d8:completei15e15:warning message3:abc8:intervali900e5:peersld2:ip12:146.71.73.514:porti51230eeee`),
-				out: new(TrackerResponse),
+				out: new(tracker.Response),
 			},
 			wantErr: false,
-			validate: func(t *testing.T, resp *TrackerResponse) {
+			validate: func(t *testing.T, resp *tracker.Response) {
 				assert.NotNil(t, resp.Complete)
 				assert.Equal(t, int64(15), *resp.Complete)
 
@@ -97,10 +98,10 @@ func TestDecodeTrackerResponse(t *testing.T) {
 					0x39, 0x30, 0x30, 0x65, 0x35, 0x3a, 0x70, 0x65, 0x65, 0x72, 0x73, 0x36,
 					0x3a, 0x92, 0x47, 0x49, 0x33, 0xc8, 0x1e, 0x36, 0x3a, 0x70, 0x65, 0x65,
 					0x72, 0x73, 0x36, 0x30, 0x3a, 0x65}),
-				out: new(TrackerResponse),
+				out: new(tracker.Response),
 			},
 			wantErr: false,
-			validate: func(t *testing.T, resp *TrackerResponse) {
+			validate: func(t *testing.T, resp *tracker.Response) {
 				assert.NotNil(t, resp.Interval)
 				assert.Equal(t, int64(900), *resp.Interval)
 
@@ -114,8 +115,8 @@ func TestDecodeTrackerResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := DecodeTrackerResponse(tt.args.src, tt.args.out); (err != nil) != tt.wantErr {
-				t.Errorf("DecodeTrackerResponse() error = %v, wantErr %v", err, tt.wantErr)
+			if err := tracker.DecodeResponse(tt.args.src, tt.args.out); (err != nil) != tt.wantErr {
+				t.Errorf("Decodetracker.Response() error = %v, wantErr %v", err, tt.wantErr)
 			}
 
 			tt.validate(t, tt.args.out)

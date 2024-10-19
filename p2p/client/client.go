@@ -1,15 +1,15 @@
 package client
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
+	"sync/atomic"
+	"time"
 
-	"github.com/Despire/tinytorrent/bencoding"
+	"github.com/Despire/tinytorrent/p2p/client/internal/status"
+	"github.com/Despire/tinytorrent/p2p/client/internal/tracker"
 	"github.com/Despire/tinytorrent/torrent"
 )
 
@@ -19,70 +19,129 @@ type Peer struct {
 	id     string
 	logger *slog.Logger
 	port   int
+
+	handler  chan string
+	done     chan struct{}
+	torrents map[string]*status.Tracker
 }
 
-func New(ctx context.Context, torrent *torrent.MetaInfoFile, opts ...Option) (*Peer, error) {
-	c := &Peer{}
-	defaults(c)
+func New(opts ...Option) (*Peer, error) {
+	p := &Peer{
+		handler:  make(chan string),
+		done:     make(chan struct{}),
+		torrents: make(map[string]*status.Tracker),
+	}
+	defaults(p)
 
 	for _, o := range opts {
-		o(c)
+		o(p)
 	}
 
-	c.logger = c.logger.With(slog.Group(c.id, slog.String("id", c.id)))
+	go p.watch()
 
-	// TODO: rewrite this with new api in tracker.go
-	params := url.Values{
-		"info_hash": {string(torrent.Metadata.Hash[:])},
-		"peer_id":   {c.id},
-		"port":      {fmt.Sprint(c.port)},
-	}
-
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		fmt.Sprintf("%s?%s", torrent.Announce, params.Encode()),
-		nil,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	c.logger.Debug("initiating communication with tracker", "url", req.URL.String())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("request send to tracker at %s returned status code: %v, body: %s", req.URL.String(), resp.StatusCode, body)
-	}
-
-	v, err := bencoding.Decode(bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-
-	if typ := v.Type(); typ != bencoding.DictionaryType {
-		return nil, fmt.Errorf("expected response from tracker at %s to be a bencoded dictionary, got %s", req.URL.String(), typ)
-	}
-
-	return c, nil
+	return p, nil
 }
 
-func (c *Peer) Do(ctx context.Context) error {
+func (p *Peer) Close() error { close(p.done); return nil }
+
+func (p *Peer) WorkOn(t *torrent.MetaInfoFile) (string, error) {
+	h := string(t.Metadata.Hash[:])
+	if _, ok := p.torrents[h]; ok {
+		return "", fmt.Errorf("torrent with hash %s is already tracked", h)
+	}
+
+	p.torrents[h] = &status.Tracker{
+		Torrent:    t,
+		Uploaded:   atomic.Int64{},
+		Downloaded: atomic.Int64{},
+	}
+
+	p.handler <- h
+	return h, nil
+}
+
+func (p *Peer) WaitFor(id string) <-chan error {
+	r := make(chan error)
+	go func() {
+		defer close(r)
+		for {
+			select {
+			case <-p.done:
+				r <- errors.New("peer closed")
+				return
+			default:
+				s, ok := p.torrents[id]
+				if !ok {
+					r <- fmt.Errorf("torrent with id %s was not found, its possible that it was tracked but was deleted midway", id)
+					return
+				}
+
+				if s.Torrent.BytesToDownload() == s.Downloaded.Load() {
+					return
+				}
+
+				time.Sleep(10 * time.Second)
+			}
+		}
+	}()
+	return r
+}
+
+func (p *Peer) watch() {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	for {
+		select {
+		case id := <-p.handler:
+			go p.handle(ctx, id, p.torrents[id])
+		case <-p.done:
+			cancel()
+			p.logger.Info("received signal to stop")
+			return
+		}
+	}
+}
+
+func (p *Peer) handle(ctx context.Context, id string, t *status.Tracker) {
+	const defaultPeerCount = 30
+
+	p.logger.Debug("initiating communication with tracker", "url", t.Torrent.Announce)
+
+	start, err := tracker.CreateRequest(ctx, t.Torrent.AnnounceList[1], &tracker.RequestParams{
+		InfoHash:   id,
+		PeerID:     p.id,
+		Port:       int64(p.port),
+		Uploaded:   0,
+		Downloaded: 0,
+		Left:       t.Torrent.BytesToDownload(),
+		Compact:    tracker.SetOptional[int64](1),
+		Event:      tracker.SetOptional(tracker.EventStarted),
+		NumWant:    tracker.SetOptional[int64](defaultPeerCount),
+	})
+	if err != nil {
+		p.logger.Error("failed to contact tracker", "err", err)
+		return
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("received signal to stop")
-			return nil
+			p.logger.Info("stopping work on torrent: %s, received signal stop", slog.String("url", t.Torrent.Announce))
+			_, err := tracker.CreateRequest(context.Background(), t.Torrent.Announce, &tracker.RequestParams{
+				InfoHash:   id,
+				PeerID:     p.id,
+				Port:       int64(p.port),
+				Uploaded:   t.Uploaded.Load(),
+				Downloaded: t.Downloaded.Load(),
+				Left:       t.Torrent.BytesToDownload() - t.Downloaded.Load(),
+				Compact:    tracker.SetOptional[int64](1),
+				Event:      tracker.SetOptional(tracker.EventStopped),
+				TrackerID:  start.TrackerID,
+			})
+			if err != nil {
+				p.logger.Error("failed announce stop to tracker", "err", err)
+			}
+			return
 		}
 	}
 }

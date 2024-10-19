@@ -89,6 +89,21 @@ type MetaInfoFile struct {
 	Encoding *string
 }
 
+func (m *MetaInfoFile) BytesToDownload() int64 {
+	switch {
+	case m.InfoSingleFile != nil:
+		return m.InfoSingleFile.Length
+	case m.InfoMultiFile != nil:
+		var total int64
+		for _, f := range m.InfoMultiFile.Files {
+			total += f.Length
+		}
+		return total
+	default:
+		panic("malformed meta_info_file state")
+	}
+}
+
 func From(bencoded io.Reader) (*MetaInfoFile, error) {
 	v, err := bencoding.Decode(bencoded)
 	if err != nil {
@@ -148,11 +163,22 @@ func apply(key string, value bencoding.Value, info *MetaInfoFile) error {
 		}
 
 		for _, v := range *l {
-			addr, ok := v.(*bencoding.ByteString)
-			if !ok {
-				return fmt.Errorf("expected address inside announce-list to be of type ByteString but was %T", value)
+			switch v.Type() {
+			case bencoding.ByteStringType:
+				addr := v.(*bencoding.ByteString)
+				info.AnnounceList = append(info.AnnounceList, string(*addr))
+			case bencoding.ListType:
+				for _, v := range *v.(*bencoding.List) {
+					addr, ok := v.(*bencoding.ByteString)
+					if !ok {
+						return fmt.Errorf("expected list item inside announce-list to be of type ByteString but was %T", v)
+					}
+					info.AnnounceList = append(info.AnnounceList, string(*addr))
+				}
+			default:
+				return fmt.Errorf("un-expected announce-list type %T", v)
 			}
-			info.AnnounceList = append(info.AnnounceList, string(*addr))
+
 		}
 		return nil
 	case "url-list":
