@@ -43,10 +43,7 @@ func Identify(reader io.Reader) (*Message, error) {
 
 	l := binary.BigEndian.Uint32(length[:])
 	if l == 0 {
-		return &Message{
-			Type:    KeepAliveType,
-			Payload: nil,
-		}, nil
+		return &Message{Type: KeepAliveType}, nil
 	}
 
 	var messageID [1]byte
@@ -71,15 +68,15 @@ func Identify(reader io.Reader) (*Message, error) {
 
 	switch typ := MessageType(messageID[0]); typ {
 	case ChokeType:
-		return nil, fmt.Errorf("unimplemented ChokeType")
+		return &Message{Type: ChokeType}, nil
 	case UnChokeType:
-		return nil, fmt.Errorf("unimplemented UnChokeType")
+		return &Message{Type: UnChokeType}, nil
 	case InterestType:
-		return nil, fmt.Errorf("unimplemented InterestType")
+		return &Message{Type: InterestType}, nil
 	case NotInterestType:
-		return nil, fmt.Errorf("unimplemented NotInterestType")
+		return &Message{Type: NotInterestType}, nil
 	case HaveType:
-		return nil, fmt.Errorf("unimplemented HaveType")
+		return &Message{Type: HaveType, Payload: payload}, nil
 	case BitfieldType:
 		return nil, fmt.Errorf("unimplemented BitfieldType")
 	case RequestType:

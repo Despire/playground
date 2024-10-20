@@ -11,7 +11,7 @@ import (
 	"github.com/Despire/tinytorrent/p2p/messagesv1"
 )
 
-type PeerStatus string
+type Status string
 
 const (
 	// Choked says whether the remote peer has choked this client.
@@ -20,40 +20,59 @@ const (
 	// The client should not attempt to send requests for blocks,
 	// and it should consider all pending (unanswered) requests to
 	// be discarded by the remote peer.
-	Choked PeerStatus = "choked"
+	Choked Status = "choked"
 	// UnChoked says whether the remote peer is interested
 	// in something this client has to offer. This is a notification
 	// that the remote peer will begin requesting blocks when the client
 	// unchokes them.
-	UnChoked PeerStatus = "unchoked"
+	UnChoked Status = "unchoked"
 )
 
-type ConnectionStatus string
+type Interest string
+
+const (
+	// Interested represents when remote peer is interested in something this client has to offer.
+	// This is a notification that the remote peer will begin requesting blocks when the client unchokes them.
+	Interested Interest = "interested"
+	// NotInterested represents when a remote peer is not interested in something this client has to offer.
+	NotInterested Interest = "not_interested"
+)
+
+type ConnectionStatus uint32
 
 const (
 	// ConnectionPending connection describes a state where a client
 	// is waiting for the Peer to send the Handshake.
-	ConnectionPending ConnectionStatus = "new"
+	ConnectionPending ConnectionStatus = iota
 	// ConnectionEstablished connection describes a state where a peer
 	// has sent the Handshake and both clients speak the same
 	// protocol.
-	ConnectionEstablished ConnectionStatus = "established"
+	ConnectionEstablished
 	// ConnectionKilled connection describes a connection that was
 	// terminated.
-	ConnectionKilled ConnectionStatus = "killed"
+	ConnectionKilled
 )
 
 // Peer represents a peer in the swarm for sharing a file.
 type Peer struct {
-	logger           *slog.Logger
-	Id               string
-	Addr             string
-	Conn             net.Conn
+	logger *slog.Logger
+	Id     string
+	Addr   string
+
+	conn             net.Conn
 	ConnectionStatus ConnectionStatus
-	// Peer status related to this client.
-	PeerStatus PeerStatus
-	// This Clients status related to this Peer.
-	ClientStatus PeerStatus
+
+	Status struct {
+		Remote Status
+		This   Status
+	}
+
+	Interest struct {
+		Remote Interest
+		This   Interest
+	}
+
+	bitfield BitField
 }
 
 func New(logger *slog.Logger, id string, addr string) (*Peer, error) {
@@ -65,21 +84,27 @@ func New(logger *slog.Logger, id string, addr string) (*Peer, error) {
 		logger = logger.With(slog.String("peer_id", id))
 	}
 
-	return &Peer{
+	p := &Peer{
 		logger:           logger,
 		Id:               id,
 		Addr:             addr,
-		Conn:             conn,
+		conn:             conn,
 		ConnectionStatus: ConnectionPending,
-		PeerStatus:       Choked,
-		ClientStatus:     Choked,
-	}, nil
+	}
+
+	p.Status.Remote = Choked
+	p.Status.This = Choked
+
+	p.Interest.Remote = NotInterested
+	p.Interest.This = NotInterested
+
+	return p, nil
 }
 
 func (p *Peer) Close() error {
 	if p.ConnectionStatus != ConnectionKilled {
 		p.ConnectionStatus = ConnectionKilled
-		return p.Conn.Close()
+		return p.conn.Close()
 	}
 	return nil
 }
@@ -102,7 +127,7 @@ func (p *Peer) HandshakeV1(infoHash, peerID string) error {
 
 	msg := h.Serialize()
 
-	w, err := io.Copy(p.Conn, bytes.NewReader(msg))
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
 	if err != nil {
 		return fmt.Errorf("failed to write v1 handshake message: %w", err)
 	}
@@ -112,7 +137,7 @@ func (p *Peer) HandshakeV1(infoHash, peerID string) error {
 	}
 
 	var resp [messagesv1.HandshakeLength]byte
-	r, err := io.ReadFull(p.Conn, resp[:])
+	r, err := io.ReadFull(p.conn, resp[:])
 	if err != nil {
 		return fmt.Errorf("failed to read v1 handshake message: %w", err)
 	}
@@ -151,7 +176,7 @@ func (p *Peer) KeepAlive() error {
 	}
 
 	msg := new(messagesv1.KeepAlive).Serialize()
-	w, err := io.Copy(p.Conn, bytes.NewReader(msg))
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
 	if err != nil {
 		return fmt.Errorf("failed to write keepalive message: %w", err)
 	}
