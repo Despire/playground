@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Despire/tinytorrent/p2p/client/internal/tracker"
+	"github.com/Despire/tinytorrent/cmd/cli/client/internal/tracker"
 	"github.com/stretchr/testify/assert"
 )
 

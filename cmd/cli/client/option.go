@@ -8,7 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 
-	"github.com/Despire/tinytorrent/p2p/client/internal/build"
+	"github.com/Despire/tinytorrent/cmd/cli/client/internal/build"
 )
 
 type Option func(client *Client)

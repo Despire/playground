@@ -1,10 +1,12 @@
-package p2p
+package peer
 
 import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"time"
 
 	"github.com/Despire/tinytorrent/p2p/messagesv1"
 )
@@ -29,20 +31,21 @@ const (
 type ConnectionStatus string
 
 const (
-	// Pending connection describes a state where a client
+	// ConnectionPending connection describes a state where a client
 	// is waiting for the Peer to send the Handshake.
-	Pending ConnectionStatus = "new"
-	// Established connection describes a state where a peer
+	ConnectionPending ConnectionStatus = "new"
+	// ConnectionEstablished connection describes a state where a peer
 	// has sent the Handshake and both clients speak the same
 	// protocol.
-	Established ConnectionStatus = "established"
-	// Killed connection describes a connection that was
+	ConnectionEstablished ConnectionStatus = "established"
+	// ConnectionKilled connection describes a connection that was
 	// terminated.
-	Killed ConnectionStatus = "killed"
+	ConnectionKilled ConnectionStatus = "killed"
 )
 
 // Peer represents a peer in the swarm for sharing a file.
 type Peer struct {
+	logger           *slog.Logger
 	Id               string
 	Addr             string
 	Conn             net.Conn
@@ -53,28 +56,40 @@ type Peer struct {
 	ClientStatus PeerStatus
 }
 
-func NewPeer(id string, addr string) (*Peer, error) {
-	conn, err := net.Dial("tcp", addr)
+func New(logger *slog.Logger, id string, addr string) (*Peer, error) {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to peer at %s: %w", addr, err)
 	}
+	if id != "" {
+		logger = logger.With(slog.String("peer_id", id))
+	}
 
 	return &Peer{
+		logger:           logger,
 		Id:               id,
 		Addr:             addr,
 		Conn:             conn,
-		ConnectionStatus: Pending,
+		ConnectionStatus: ConnectionPending,
 		PeerStatus:       Choked,
 		ClientStatus:     Choked,
 	}, nil
 }
 
-func (p *Peer) Close() error { p.ConnectionStatus = Killed; return p.Conn.Close() }
+func (p *Peer) Close() error {
+	if p.ConnectionStatus != ConnectionKilled {
+		p.ConnectionStatus = ConnectionKilled
+		return p.Conn.Close()
+	}
+	return nil
+}
 
 // HandshakeV1 performs the handshake according to the version 1.0
-// of the specifications.
+// of the specifications. After a successful handshake a new goroutine
+// is spawned that actively listens. on the established BitTorrent
+// channel to decode incoming messages.
 func (p *Peer) HandshakeV1(infoHash, peerID string) error {
-	if p.ConnectionStatus == Established {
+	if p.ConnectionStatus == ConnectionEstablished {
 		return nil
 	}
 
@@ -118,7 +133,31 @@ func (p *Peer) HandshakeV1(infoHash, peerID string) error {
 		return fmt.Errorf("invalid v1 handshake message peer id mismatch")
 	}
 
-	p.ConnectionStatus = Established
+	// adjust peer information.
+	if p.Id == "" {
+		p.Id = h.PeerID
+		p.logger = p.logger.With(slog.String("peer_id", p.Id))
+	}
+	p.ConnectionStatus = ConnectionEstablished
+
+	go p.listener()
+
+	return nil
+}
+
+func (p *Peer) KeepAlive() error {
+	if p.ConnectionStatus != ConnectionEstablished {
+		return fmt.Errorf("invalid connection status %s, needed %s", p.ConnectionStatus, ConnectionEstablished)
+	}
+
+	msg := new(messagesv1.KeepAlive).Serialize()
+	w, err := io.Copy(p.Conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write keepalive message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of the keepalive message")
+	}
 
 	return nil
 }

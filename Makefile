@@ -24,13 +24,9 @@ linter:
 format:
 	$(GO) fmt ./...
 
-.PHONY: run
-run:
-	$(GO) run ./cmd/cli-client
-
 .PHONY: build
 build:
-	$(GO) build -o bin/tinytorrent \
-	-ldflags="-X 'github.com/Despire/tinytorrent/p2p/client/internal/build.Date=${BUILD_DATE}'\
-	-X 'github.com/Despire/tinytorrent/p2p/client/internal/build.Version=${VERSION}'\
-	-X 'github.com/Despire/tinytorrent/p2p/client/internal/build.Hash=${HASH}'"  ./cmd/cli-client
+	$(GO) build -race -o bin/tinytorrent \
+	-ldflags="-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Date=${BUILD_DATE}'\
+	-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Version=${VERSION}'\
+	-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Hash=${HASH}'"  ./cmd/cli

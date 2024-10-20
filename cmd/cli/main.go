@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/Despire/tinytorrent/p2p/client"
+	"github.com/Despire/tinytorrent/cmd/cli/client"
 	"github.com/Despire/tinytorrent/torrent"
 )
 
