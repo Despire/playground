@@ -87,7 +87,15 @@ func (p *Peer) process(msg *messagesv1.Message) error {
 		if err := b.Deserialize(msg.Payload); err != nil {
 			return fmt.Errorf("could not deserialize message %s: %W", msg.Type, err)
 		}
-		p.bitfield = b.Bitfield
+		if len(b.Bitfield) != len(p.bitfield.B) {
+			errClose := p.Close()
+			err := errors.New("received incorrect bit-flied length, dropping connection")
+			if errClose != nil {
+				err = fmt.Errorf("%w: %w", err, errClose)
+			}
+			return err
+		}
+		p.bitfield.B = b.Bitfield
 		return nil
 	default:
 		return fmt.Errorf("no implementation for processing message type: %s", msg.Type)

@@ -32,8 +32,7 @@ func (t *Tracker) UpdatePeers(clientID string, logger *slog.Logger, resp *tracke
 		)
 		p, ok := t.Peers[ip]
 		if !ok {
-			pieces := (t.Torrent.BytesToDownload() / t.Torrent.PieceLength) + 1
-			np, err := peer.New(logger, r.PeerID, ip, pieces)
+			np, err := peer.New(logger, r.PeerID, ip, t.Torrent.NumPieces())
 			if err != nil {
 				errAll = errors.Join(errAll, fmt.Errorf("failed to connect to peer %s: %w", ip, err))
 				continue

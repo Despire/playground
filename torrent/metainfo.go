@@ -104,6 +104,19 @@ func (m *MetaInfoFile) BytesToDownload() int64 {
 	}
 }
 
+func (m *MetaInfoFile) NumPieces() int64 {
+	switch {
+	case m.InfoSingleFile != nil, m.InfoMultiFile != nil:
+		// assert multiple of 20
+		if len(m.Pieces)%20 != 0 {
+			panic("malformed meta_info_file state")
+		}
+		return int64(len(m.Pieces) / 20)
+	default:
+		panic("malformed meta_info_file state")
+	}
+}
+
 func From(bencoded io.Reader) (*MetaInfoFile, error) {
 	v, err := bencoding.Decode(bencoded)
 	if err != nil {

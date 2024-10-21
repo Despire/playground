@@ -76,7 +76,7 @@ type Peer struct {
 		This   Interest
 	}
 
-	bitfield BitField
+	bitfield *BitField
 }
 
 func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
@@ -93,7 +93,7 @@ func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
 		Id:       id,
 		Addr:     addr,
 		conn:     conn,
-		bitfield: make(BitField, (pieces/8)+1),
+		bitfield: NewBitfield(pieces),
 	}
 
 	p.ConnectionStatus.Store(int32(ConnectionPending))
