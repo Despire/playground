@@ -119,29 +119,42 @@ func (p *Client) watch() {
 func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status.Tracker) {
 	const defaultPeerCount = 5
 
-	c.logger.Debug("initiating communication with tracker",
-		slog.String("url", t.Torrent.Announce),
-		slog.String("infoHash", infoHash),
-	)
+	var start *tracker.Response
 
-	start, err := tracker.CreateRequest(ctx, t.Torrent.Announce, &tracker.RequestParams{
-		InfoHash:   infoHash,
-		PeerID:     c.id,
-		Port:       int64(c.port),
-		Uploaded:   0,
-		Downloaded: 0,
-		Left:       t.Torrent.BytesToDownload(),
-		Compact:    tracker.Optional[int64](1),
-		Event:      tracker.Optional(tracker.EventStarted),
-		NumWant:    tracker.Optional[int64](defaultPeerCount),
-	})
-	if err != nil {
-		c.logger.Error("failed to contact tracker",
-			slog.String("err", err.Error()),
-			slog.String("infoHash", infoHash),
-		)
-		c.wg.Done()
-		return
+tracker:
+	for {
+		select {
+		case <-ctx.Done():
+			c.wg.Done()
+			return
+		default:
+			c.logger.Debug("initiating communication with tracker",
+				slog.String("url", t.Torrent.Announce),
+				slog.String("infoHash", infoHash),
+			)
+
+			var err error
+			start, err = tracker.CreateRequest(ctx, t.Torrent.Announce, &tracker.RequestParams{
+				InfoHash:   infoHash,
+				PeerID:     c.id,
+				Port:       int64(c.port),
+				Uploaded:   0,
+				Downloaded: 0,
+				Left:       t.Torrent.BytesToDownload(),
+				Compact:    tracker.Optional[int64](1),
+				Event:      tracker.Optional(tracker.EventStarted),
+				NumWant:    tracker.Optional[int64](defaultPeerCount),
+			})
+			if err != nil {
+				c.logger.Error("failed to contact tracker",
+					slog.String("err", err.Error()),
+					slog.String("infoHash", infoHash),
+				)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			break tracker
+		}
 	}
 
 	if start.Interval == nil {
@@ -171,7 +184,7 @@ func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status
 	)
 
 	ticker := time.NewTicker(time.Duration(*start.Interval) * time.Second)
-	keepAlive := time.NewTicker(30 * time.Second)
+	keepAlive := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():

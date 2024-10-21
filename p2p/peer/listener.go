@@ -58,6 +58,9 @@ func (p *Peer) listener() {
 
 func (p *Peer) process(msg *messagesv1.Message) error {
 	switch msg.Type {
+	case messagesv1.KeepAliveType:
+		// do nothing.
+		return nil
 	case messagesv1.ChokeType: // receive choked from remote peer.
 		p.Status.Remote = Choked
 		return nil
@@ -75,9 +78,16 @@ func (p *Peer) process(msg *messagesv1.Message) error {
 		if err := h.Deserialize(msg.Payload); err != nil {
 			return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
 		}
-		if err := p.bitfield.Set(h.Index); err != nil {
-			return fmt.Errorf("could not set bitfield index %d: %w", h.Index, err)
+		if err := p.bitfield.SetWithCheck(h.Index); err != nil {
+			return fmt.Errorf("could not acknowledge piece %v: %w", h.Index, err)
 		}
+		return nil
+	case messagesv1.BitfieldType:
+		b := new(messagesv1.Bitfield)
+		if err := b.Deserialize(msg.Payload); err != nil {
+			return fmt.Errorf("could not deserialize message %s: %W", msg.Type, err)
+		}
+		p.bitfield = b.Bitfield
 		return nil
 	default:
 		return fmt.Errorf("no implementation for processing message type: %s", msg.Type)

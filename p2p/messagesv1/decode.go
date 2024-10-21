@@ -67,18 +67,10 @@ func Identify(reader io.Reader) (*Message, error) {
 	}
 
 	switch typ := MessageType(messageID[0]); typ {
-	case ChokeType:
-		return &Message{Type: ChokeType}, nil
-	case UnChokeType:
-		return &Message{Type: UnChokeType}, nil
-	case InterestType:
-		return &Message{Type: InterestType}, nil
-	case NotInterestType:
-		return &Message{Type: NotInterestType}, nil
-	case HaveType:
-		return &Message{Type: HaveType, Payload: payload}, nil
-	case BitfieldType:
-		return nil, fmt.Errorf("unimplemented BitfieldType")
+	case ChokeType, UnChokeType, InterestType, NotInterestType:
+		return &Message{Type: typ}, nil
+	case HaveType, BitfieldType:
+		return &Message{Type: typ, Payload: payload}, nil
 	case RequestType:
 		return nil, fmt.Errorf("unimplemented RequestType")
 	case PieceType:

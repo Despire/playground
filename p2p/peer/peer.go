@@ -11,7 +11,8 @@ import (
 	"github.com/Despire/tinytorrent/p2p/messagesv1"
 )
 
-type Status string
+//go:generate stringer -type=Status
+type Status uint8
 
 const (
 	// Choked says whether the remote peer has choked this client.
@@ -20,25 +21,27 @@ const (
 	// The client should not attempt to send requests for blocks,
 	// and it should consider all pending (unanswered) requests to
 	// be discarded by the remote peer.
-	Choked Status = "choked"
+	Choked Status = iota
 	// UnChoked says whether the remote peer is interested
 	// in something this client has to offer. This is a notification
 	// that the remote peer will begin requesting blocks when the client
 	// unchokes them.
-	UnChoked Status = "unchoked"
+	UnChoked
 )
 
-type Interest string
+//go:generate stringer -type=Interest
+type Interest uint8
 
 const (
 	// Interested represents when remote peer is interested in something this client has to offer.
 	// This is a notification that the remote peer will begin requesting blocks when the client unchokes them.
-	Interested Interest = "interested"
+	Interested Interest = iota
 	// NotInterested represents when a remote peer is not interested in something this client has to offer.
-	NotInterested Interest = "not_interested"
+	NotInterested
 )
 
-type ConnectionStatus uint32
+//go:generate stringer -type=ConnectionStatus
+type ConnectionStatus uint8
 
 const (
 	// ConnectionPending connection describes a state where a client
@@ -75,7 +78,7 @@ type Peer struct {
 	bitfield BitField
 }
 
-func New(logger *slog.Logger, id string, addr string) (*Peer, error) {
+func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to peer at %s: %w", addr, err)
@@ -90,6 +93,7 @@ func New(logger *slog.Logger, id string, addr string) (*Peer, error) {
 		Addr:             addr,
 		conn:             conn,
 		ConnectionStatus: ConnectionPending,
+		bitfield:         make(BitField, (pieces/8)+1),
 	}
 
 	p.Status.Remote = Choked

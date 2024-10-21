@@ -86,3 +86,12 @@ func (h *Have) Deserialize(b []byte) error {
 	h.Index = binary.BigEndian.Uint32(b)
 	return nil
 }
+
+type Bitfield struct {
+	Bitfield []byte
+}
+
+func (b *Bitfield) Deserialize(payload []byte) error {
+	b.Bitfield = payload
+	return nil
+}
