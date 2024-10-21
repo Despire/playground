@@ -18,7 +18,7 @@ const _ConnectionStatus_name = "ConnectionPendingConnectionEstablishedConnection
 var _ConnectionStatus_index = [...]uint8{0, 17, 38, 54}
 
 func (i ConnectionStatus) String() string {
-	if i >= ConnectionStatus(len(_ConnectionStatus_index)-1) {
+	if i < 0 || i >= ConnectionStatus(len(_ConnectionStatus_index)-1) {
 		return "ConnectionStatus(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
 	return _ConnectionStatus_name[_ConnectionStatus_index[i]:_ConnectionStatus_index[i+1]]

@@ -117,7 +117,7 @@ func (p *Client) watch() {
 }
 
 func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status.Tracker) {
-	const defaultPeerCount = 5
+	const defaultPeerCount = 30
 
 	var start *tracker.Response
 
@@ -184,7 +184,7 @@ tracker:
 	)
 
 	ticker := time.NewTicker(time.Duration(*start.Interval) * time.Second)
-	keepAlive := time.NewTicker(10 * time.Second)
+	keepAlive := time.NewTicker(2 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():

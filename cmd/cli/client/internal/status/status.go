@@ -43,7 +43,7 @@ func (t *Tracker) UpdatePeers(clientID string, logger *slog.Logger, resp *tracke
 			p = np
 		}
 
-		switch p.ConnectionStatus {
+		switch s := peer.ConnectionStatus(p.ConnectionStatus.Load()); s {
 		case peer.ConnectionPending:
 			logger.Info("initiating handshake",
 				slog.String("peer_ip", ip),

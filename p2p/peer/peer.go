@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/Despire/tinytorrent/p2p/messagesv1"
@@ -41,7 +42,7 @@ const (
 )
 
 //go:generate stringer -type=ConnectionStatus
-type ConnectionStatus uint8
+type ConnectionStatus int32
 
 const (
 	// ConnectionPending connection describes a state where a client
@@ -63,7 +64,7 @@ type Peer struct {
 	Addr   string
 
 	conn             net.Conn
-	ConnectionStatus ConnectionStatus
+	ConnectionStatus atomic.Int32
 
 	Status struct {
 		Remote Status
@@ -88,13 +89,14 @@ func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
 	}
 
 	p := &Peer{
-		logger:           logger,
-		Id:               id,
-		Addr:             addr,
-		conn:             conn,
-		ConnectionStatus: ConnectionPending,
-		bitfield:         make(BitField, (pieces/8)+1),
+		logger:   logger,
+		Id:       id,
+		Addr:     addr,
+		conn:     conn,
+		bitfield: make(BitField, (pieces/8)+1),
 	}
+
+	p.ConnectionStatus.Store(int32(ConnectionPending))
 
 	p.Status.Remote = Choked
 	p.Status.This = Choked
@@ -106,8 +108,8 @@ func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
 }
 
 func (p *Peer) Close() error {
-	if p.ConnectionStatus != ConnectionKilled {
-		p.ConnectionStatus = ConnectionKilled
+	if p.ConnectionStatus.Load() != int32(ConnectionKilled) {
+		p.ConnectionStatus.Store(int32(ConnectionKilled))
 		return p.conn.Close()
 	}
 	return nil
@@ -118,7 +120,7 @@ func (p *Peer) Close() error {
 // is spawned that actively listens. on the established BitTorrent
 // channel to decode incoming messages.
 func (p *Peer) HandshakeV1(infoHash, peerID string) error {
-	if p.ConnectionStatus == ConnectionEstablished {
+	if p.ConnectionStatus.Load() == int32(ConnectionEstablished) {
 		return nil
 	}
 
@@ -167,7 +169,7 @@ func (p *Peer) HandshakeV1(infoHash, peerID string) error {
 		p.Id = h.PeerID
 		p.logger = p.logger.With(slog.String("peer_id", p.Id))
 	}
-	p.ConnectionStatus = ConnectionEstablished
+	p.ConnectionStatus.Store(int32(ConnectionEstablished))
 
 	go p.listener()
 
@@ -175,8 +177,11 @@ func (p *Peer) HandshakeV1(infoHash, peerID string) error {
 }
 
 func (p *Peer) KeepAlive() error {
-	if p.ConnectionStatus != ConnectionEstablished {
-		return fmt.Errorf("invalid connection status %s, needed %s", p.ConnectionStatus, ConnectionEstablished)
+	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
 	}
 
 	msg := new(messagesv1.KeepAlive).Serialize()
