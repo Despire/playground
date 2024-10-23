@@ -105,3 +105,26 @@ func (b *Bitfield) Deserialize(payload []byte) error {
 	b.Bitfield = payload
 	return nil
 }
+
+type Port struct {
+	Port uint16
+}
+
+func (p *Port) Serialize() []byte {
+	var msg [4 + 1 + 2]byte
+
+	binary.BigEndian.PutUint32(msg[:4], 1+2)
+	msg[4] = byte(PortType)
+	binary.BigEndian.PutUint16(msg[5:7], p.Port)
+
+	return msg[:]
+}
+
+func (p *Port) Deserialize(msg []byte) error {
+	if len(msg) != 2 {
+		return fmt.Errorf("invalid payload length")
+	}
+
+	p.Port = binary.BigEndian.Uint16(msg[:2])
+	return nil
+}

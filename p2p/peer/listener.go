@@ -77,21 +77,32 @@ func (p *Peer) process(msg *messagesv1.Message) error {
 	case messagesv1.HaveType: // peer announce that he completed donwloading piecie with index.
 		h := new(messagesv1.Have)
 		if err := h.Deserialize(msg.Payload); err != nil {
-			return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			err := fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			if errClose := p.Close(); err != nil {
+				err = fmt.Errorf("%w: %w", err, errClose)
+			}
+			return err
 		}
 		if err := p.bitfield.SetWithCheck(h.Index); err != nil {
-			return fmt.Errorf("could not acknowledge piece %v: %w", h.Index, err)
+			err := fmt.Errorf("could not acknowledge piece %v: %w", h.Index, err)
+			if errClose := p.Close(); err != nil {
+				err = fmt.Errorf("%w: %w", err, errClose)
+			}
+			return err
 		}
 		return nil
 	case messagesv1.BitfieldType:
 		b := new(messagesv1.Bitfield)
 		if err := b.Deserialize(msg.Payload); err != nil {
-			return fmt.Errorf("could not deserialize message %s: %W", msg.Type, err)
+			err := fmt.Errorf("could not deserialize message %s: %W", msg.Type, err)
+			if errClose := p.Close(); errClose != nil {
+				err = fmt.Errorf("%w: %w", err, errClose)
+			}
+			return err
 		}
 		if len(b.Bitfield) != len(p.bitfield.B) {
-			errClose := p.Close()
 			err := errors.New("received incorrect bit-flied length, dropping connection")
-			if errClose != nil {
+			if errClose := p.Close(); errClose != nil {
 				err = fmt.Errorf("%w: %w", err, errClose)
 			}
 			return err
