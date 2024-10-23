@@ -91,6 +91,16 @@ type Bitfield struct {
 	Bitfield []byte
 }
 
+func (b *Bitfield) Serialize() []byte {
+	msg := make([]byte, 4+1+len(b.Bitfield))
+
+	binary.BigEndian.PutUint32(msg[:4], 1+uint32(len(b.Bitfield)))
+	msg[4] = byte(BitfieldType)
+	copy(msg[5:], b.Bitfield)
+
+	return msg
+}
+
 func (b *Bitfield) Deserialize(payload []byte) error {
 	b.Bitfield = payload
 	return nil

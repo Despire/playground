@@ -19,7 +19,7 @@ func TestBitField_Set(t *testing.T) {
 	}{
 		{
 			name: "ok-set-3-in-byte-1",
-			b:    NewBitfield(8),
+			b:    NewBitfield(1, false),
 			args: args{3},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), (b.B[0]>>4)&0x1)
@@ -27,7 +27,7 @@ func TestBitField_Set(t *testing.T) {
 		},
 		{
 			name: "ok-set-0-in-byte-1",
-			b:    NewBitfield(8),
+			b:    NewBitfield(1, false),
 			args: args{0},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), (b.B[0]>>7)&0x1)
@@ -35,7 +35,7 @@ func TestBitField_Set(t *testing.T) {
 		},
 		{
 			name: "ok-set-7-in-byte-1",
-			b:    NewBitfield(8),
+			b:    NewBitfield(1, false),
 			args: args{7},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), b.B[0]&0x1)
@@ -43,7 +43,7 @@ func TestBitField_Set(t *testing.T) {
 		},
 		{
 			name: "ok-set-overflow",
-			b:    NewBitfield(9),
+			b:    NewBitfield(2, true),
 			args: args{8},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), (b.B[1]>>7)&0x1)
@@ -70,13 +70,13 @@ func TestBitField_SetWithCheck(t *testing.T) {
 	}{
 		{
 			name:     "err-set-overflow",
-			bitfield: NewBitfield(9),
+			bitfield: NewBitfield(2, true),
 			args:     args{9},
 			wantErr:  func(t assert.TestingT, err error, i ...interface{}) bool { return assert.NotNil(t, err) },
 		},
 		{
 			name:     "ok-set-overflow",
-			bitfield: NewBitfield(9),
+			bitfield: NewBitfield(2, true),
 			args:     args{8},
 			wantErr:  func(t assert.TestingT, err error, i ...interface{}) bool { return assert.Nil(t, err) },
 		},

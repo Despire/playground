@@ -117,7 +117,7 @@ func (p *Client) watch() {
 }
 
 func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status.Tracker) {
-	const defaultPeerCount = 30
+	const defaultPeerCount = 1
 
 	var start *tracker.Response
 
@@ -170,6 +170,7 @@ tracker:
 		slog.String("interval", fmt.Sprint(*start.Interval)),
 	)
 
+	// TODO: send unchoke and interested messages.
 	if err := t.UpdatePeers(c.id, c.logger, start); err != nil {
 		c.logger.Error("failed to update peers, attempting to continue",
 			slog.String("err", err.Error()),

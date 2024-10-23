@@ -32,7 +32,8 @@ func (t *Tracker) UpdatePeers(clientID string, logger *slog.Logger, resp *tracke
 		)
 		p, ok := t.Peers[ip]
 		if !ok {
-			np, err := peer.New(logger, r.PeerID, ip, t.Torrent.NumPieces())
+			blocks, overflow := t.Torrent.NumBlocks()
+			np, err := peer.New(logger, r.PeerID, ip, blocks, overflow)
 			if err != nil {
 				errAll = errors.Join(errAll, fmt.Errorf("failed to connect to peer %s: %w", ip, err))
 				continue
@@ -52,6 +53,12 @@ func (t *Tracker) UpdatePeers(clientID string, logger *slog.Logger, resp *tracke
 			)
 			if err := p.HandshakeV1(string(t.Torrent.Metadata.Hash[:]), clientID); err != nil {
 				errAll = errors.Join(errAll, fmt.Errorf("failed to handshake with peer %s: %w", ip, err))
+			}
+			if err := p.Bitfield(); err != nil {
+				errAll = errors.Join(errAll, fmt.Errorf("failed to send bitfield %s: %w", ip, err))
+			}
+			if err := p.Interested(); err != nil {
+				errAll = errors.Join(errAll, fmt.Errorf("failed to set interested for peer %s: %w", ip, err))
 			}
 		case peer.ConnectionKilled:
 			logger.Info("deleting peer from tracker",

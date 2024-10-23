@@ -79,7 +79,7 @@ type Peer struct {
 	bitfield *BitField
 }
 
-func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
+func New(logger *slog.Logger, id, addr string, blocks int64, overflow bool) (*Peer, error) {
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to peer at %s: %w", addr, err)
@@ -93,7 +93,7 @@ func New(logger *slog.Logger, id, addr string, pieces int64) (*Peer, error) {
 		Id:       id,
 		Addr:     addr,
 		conn:     conn,
-		bitfield: NewBitfield(pieces),
+		bitfield: NewBitfield(blocks, overflow),
 	}
 
 	p.ConnectionStatus.Store(int32(ConnectionPending))
@@ -193,5 +193,104 @@ func (p *Peer) KeepAlive() error {
 		return fmt.Errorf("failed to write all of the keepalive message")
 	}
 
+	return nil
+}
+
+func (p *Peer) Unchoke() error {
+	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	msg := new(messagesv1.Unchoke).Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write unchoke message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of the unchoke message")
+	}
+	p.Status.This = UnChoked
+	return nil
+}
+
+func (p *Peer) Choke() error {
+	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	msg := new(messagesv1.Choke).Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write choke message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of the choke message")
+	}
+	p.Status.This = Choked
+	return nil
+}
+
+func (p *Peer) Interested() error {
+	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	msg := new(messagesv1.Interest).Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write interest message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of the interest message")
+	}
+	p.Interest.This = Interested
+	return nil
+}
+
+func (p *Peer) NotInterested() error {
+	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	msg := new(messagesv1.NotInterest).Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write not-interest message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of the not-interest message")
+	}
+	p.Interest.This = NotInterested
+	return nil
+}
+
+func (p *Peer) Bitfield() error {
+	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	msg := (&messagesv1.Bitfield{Bitfield: p.bitfield.B}).Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write bitfield message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of bitfield message")
+	}
 	return nil
 }

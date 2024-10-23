@@ -6,16 +6,20 @@ import (
 )
 
 type BitField struct {
-	B            []byte
-	overflowBits uint32
+	B       []byte
+	barrier *uint32
 }
 
-func NewBitfield(pieces int64) *BitField {
+func NewBitfield(blocks int64, overflow bool) *BitField {
 	return &BitField{
-		// If pieces % 8 == 0 then pieces + 7 will still be equal to the same number of bytes.
-		// If pieces % 8 != 0 then pieces + 8 will result in length longer by exactly 1 byte.
-		B:            make([]byte, (pieces+7)/8),
-		overflowBits: uint32(pieces % 8), // 1bit -> 1piece.
+		B: make([]byte, blocks),
+		barrier: func() *uint32 {
+			if overflow {
+				i := uint32(1)
+				return &i
+			}
+			return nil
+		}(),
 	}
 }
 
@@ -38,12 +42,12 @@ func (b *BitField) validate(idx uint32) error {
 	if field := b.byteOffset(idx); int(field) > len(b.B)-1 {
 		return fmt.Errorf("%v is out of range for bitfield", field)
 	}
-	if b.overflowBits != 0 {
+	if b.barrier != nil {
 		last := uint32(len(b.B) - 1)
 		pieceIdx := b.byteOffset(idx)
 		offset := b.bitOffset(idx)
 
-		if pieceIdx == last && offset >= b.overflowBits {
+		if pieceIdx == last && offset >= *b.barrier {
 			return errors.New("trying to set bits that do not belong to the torrent")
 		}
 	}

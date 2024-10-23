@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"time"
 
@@ -104,14 +105,14 @@ func (m *MetaInfoFile) BytesToDownload() int64 {
 	}
 }
 
-func (m *MetaInfoFile) NumPieces() int64 {
+func (m *MetaInfoFile) NumBlocks() (blocks int64, overflow bool) {
 	switch {
 	case m.InfoSingleFile != nil, m.InfoMultiFile != nil:
-		// assert multiple of 20
-		if len(m.Pieces)%20 != 0 {
-			panic("malformed meta_info_file state")
-		}
-		return int64(len(m.Pieces) / 20)
+		b := m.BytesToDownload()
+		blocks := float64(b / m.PieceLength)
+		blocks /= 8
+		blocks = math.Ceil(blocks)
+		return int64(blocks), b%m.PieceLength != 0
 	default:
 		panic("malformed meta_info_file state")
 	}

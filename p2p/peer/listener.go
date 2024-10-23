@@ -16,6 +16,7 @@ import (
 const KeepAliveTimeout = 3 * time.Minute
 
 func (p *Peer) listener() {
+	// todo if not received unchoke and interested timeout.
 	for p.ConnectionStatus.Load() == int32(ConnectionEstablished) {
 		if err := p.conn.SetReadDeadline(time.Now().Add(KeepAliveTimeout)); err != nil {
 			p.logger.Info("failed to set read deadline to KeepAliveTimeout",
