@@ -13,10 +13,25 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	opts := &slog.HandlerOptions{
 		AddSource: true,
-		Level:     slog.LevelDebug,
-	}))
+	}
+
+	switch e := os.Getenv("TINY_LOG_LEVEL"); e {
+	case "debug":
+		opts.Level = slog.LevelDebug
+	case "info":
+		opts.Level = slog.LevelInfo
+	case "warn":
+		opts.Level = slog.LevelWarn
+	case "error":
+		opts.Level = slog.LevelError
+	default:
+		opts.Level = slog.LevelInfo
+
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 
 	if err := run(context.Background(), logger, os.Args[1:]); err != nil {
 		logger.Error("stopping tinytorrent client due to encountered error while executing", "error", err)
@@ -71,6 +86,7 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to wait for work on torrent %s to finish: %w", id, err)
 		}
+		logger.Info("successfully downloaded torrent", slog.String("id", id))
 		return nil
 	}
 }

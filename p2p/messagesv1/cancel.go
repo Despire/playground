@@ -37,7 +37,7 @@ func (r *Cancel) Deserialize(data []byte) error {
 }
 
 func (r *Cancel) Validate() error {
-	if r.Length != 16*1024 {
+	if r.Length > 16*1024 {
 		return errors.New("length is not 2^14kb")
 	}
 	return nil

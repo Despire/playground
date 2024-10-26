@@ -105,11 +105,32 @@ func (m *MetaInfoFile) BytesToDownload() int64 {
 	}
 }
 
+func (m *MetaInfoFile) NumPieces() int64 {
+	switch {
+	case m.InfoSingleFile != nil, m.InfoMultiFile != nil:
+		b, err := hex.DecodeString(m.Pieces)
+		if err != nil {
+			panic(err) // This should never happen as we always hexencode.
+		}
+		return int64(len(b) / 20)
+	default:
+		panic("malformed meta_info_file state")
+	}
+}
+
+func (m *MetaInfoFile) PieceHash(piece uint32) []byte {
+	b, err := hex.DecodeString(m.Pieces)
+	if err != nil {
+		panic(err) // This should never happen as we always hexencode.
+	}
+	return b[piece*20 : piece*20+20]
+}
+
 func (m *MetaInfoFile) NumBlocks() (blocks int64, overflow bool) {
 	switch {
 	case m.InfoSingleFile != nil, m.InfoMultiFile != nil:
 		b := m.BytesToDownload()
-		blocks := float64(b / m.PieceLength)
+		blocks := float64(b) / float64(m.PieceLength)
 		blocks /= 8
 		blocks = math.Ceil(blocks)
 		return int64(blocks), b%m.PieceLength != 0

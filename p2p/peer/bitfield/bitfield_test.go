@@ -1,4 +1,4 @@
-package peer
+package bitfield
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ func TestBitField_Set(t *testing.T) {
 			b:    NewBitfield(1, false),
 			args: args{3},
 			validate: func(t *testing.T, b *BitField) {
-				assert.Equal(t, uint8(1), (b.B[0]>>4)&0x1)
+				assert.Equal(t, uint8(1), (b.b[0]>>4)&0x1)
 			},
 		},
 		{
@@ -30,7 +30,7 @@ func TestBitField_Set(t *testing.T) {
 			b:    NewBitfield(1, false),
 			args: args{0},
 			validate: func(t *testing.T, b *BitField) {
-				assert.Equal(t, uint8(1), (b.B[0]>>7)&0x1)
+				assert.Equal(t, uint8(1), (b.b[0]>>7)&0x1)
 			},
 		},
 		{
@@ -38,7 +38,7 @@ func TestBitField_Set(t *testing.T) {
 			b:    NewBitfield(1, false),
 			args: args{7},
 			validate: func(t *testing.T, b *BitField) {
-				assert.Equal(t, uint8(1), b.B[0]&0x1)
+				assert.Equal(t, uint8(1), b.b[0]&0x1)
 			},
 		},
 		{
@@ -46,12 +46,13 @@ func TestBitField_Set(t *testing.T) {
 			b:    NewBitfield(2, true),
 			args: args{8},
 			validate: func(t *testing.T, b *BitField) {
-				assert.Equal(t, uint8(1), (b.B[1]>>7)&0x1)
+				assert.Equal(t, uint8(1), (b.b[1]>>7)&0x1)
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tt.b.Set(tt.args.idx)
 			tt.validate(t, tt.b)
 		})
@@ -83,7 +84,38 @@ func TestBitField_SetWithCheck(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tt.wantErr(t, tt.bitfield.SetWithCheck(tt.args.idx), fmt.Sprintf("SetWithCheck(%v)", tt.args.idx))
+		})
+	}
+}
+
+func TestBitField_MissingPieces(t *testing.T) {
+	tests := []struct {
+		name string
+		b    *BitField
+		want []uint32
+	}{
+		{
+			name: "ok-overflow",
+			b:    NewBitfield(1, true),
+			want: []uint32{0},
+		},
+		{
+			name: "ok-not-overflow",
+			b:    NewBitfield(1, false),
+			want: []uint32{0, 1, 2, 3, 4, 5, 6, 7},
+		},
+		{
+			name: "ok-overflow-2",
+			b:    NewBitfield(2, true),
+			want: []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, tt.b.MissingPieces(), "MissingPieces()")
 		})
 	}
 }

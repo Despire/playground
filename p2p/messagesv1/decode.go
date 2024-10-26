@@ -69,16 +69,8 @@ func Identify(reader io.Reader) (*Message, error) {
 	switch typ := MessageType(messageID[0]); typ {
 	case ChokeType, UnChokeType, InterestType, NotInterestType:
 		return &Message{Type: typ}, nil
-	case HaveType, BitfieldType:
+	case HaveType, BitfieldType, RequestType, PieceType, CancelType, PortType:
 		return &Message{Type: typ, Payload: payload}, nil
-	case RequestType:
-		return nil, fmt.Errorf("unimplemented RequestType")
-	case PieceType:
-		return nil, fmt.Errorf("unimplemented PieceType")
-	case CancelType:
-		return nil, fmt.Errorf("unimplemented CancelType")
-	case PortType:
-		return nil, fmt.Errorf("unimplemented PortType")
 	default:
 		return nil, fmt.Errorf("unknown message id: %v", messageID[0])
 	}

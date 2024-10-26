@@ -5,14 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/Despire/tinytorrent/cmd/cli/client/internal/status"
 	"github.com/Despire/tinytorrent/cmd/cli/client/internal/tracker"
-	"github.com/Despire/tinytorrent/p2p/peer"
 	"github.com/Despire/tinytorrent/torrent"
 )
+
+var (
+	// TorrentDir is the directory where the torrent files will
+	// be downloaded.
+	TorrentDir = os.Getenv("TORRENT_DIR")
+)
+
+func init() {
+	if TorrentDir == "" {
+		TorrentDir = "./tinytorrendDownloads"
+		if _, err := os.Stat(TorrentDir); errors.Is(err, os.ErrNotExist) {
+			if err := os.Mkdir(TorrentDir, os.ModePerm); err != nil {
+				panic(err)
+			}
+		}
+	}
+}
 
 // Client represents a single instance of a peer within
 // the BitTorrent network.
@@ -56,12 +73,7 @@ func (p *Client) WorkOn(t *torrent.MetaInfoFile) (string, error) {
 		return "", fmt.Errorf("torrent with hash %s is already tracked", h)
 	}
 
-	p.torrentsDownloading.Swap(h, &status.Tracker{
-		Torrent:    t,
-		Uploaded:   0,
-		Downloaded: 0,
-		Peers:      make(map[string]*peer.Peer),
-	})
+	p.torrentsDownloading.Store(h, status.NewTracker(p.id, p.logger, t, TorrentDir))
 
 	p.handler <- h
 	return h, nil
@@ -86,7 +98,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 				}
 
 				p := s.(*status.Tracker)
-				if p.Torrent.BytesToDownload() == p.Downloaded {
+				if p.Torrent.BytesToDownload() == p.Downloaded.Load() {
 					return
 				}
 
@@ -117,7 +129,7 @@ func (p *Client) watch() {
 }
 
 func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status.Tracker) {
-	const defaultPeerCount = 1
+	const defaultPeerCount = 10
 
 	var start *tracker.Response
 
@@ -170,22 +182,19 @@ tracker:
 		slog.String("interval", fmt.Sprint(*start.Interval)),
 	)
 
-	// TODO: send unchoke and interested messages.
-	if err := t.UpdatePeers(c.id, c.logger, start); err != nil {
+	if err := t.UpdatePeers(start); err != nil {
 		c.logger.Error("failed to update peers, attempting to continue",
 			slog.String("err", err.Error()),
 			slog.String("infoHash", infoHash),
 		)
 	}
 
-	// TODO: download blocks...
 	c.logger.Debug("entering update loop",
 		slog.String("infoHash", infoHash),
 		slog.String("url", t.Torrent.Announce),
 	)
 
 	ticker := time.NewTicker(time.Duration(*start.Interval) * time.Second)
-	keepAlive := time.NewTicker(2 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
@@ -197,9 +206,9 @@ tracker:
 				InfoHash:   infoHash,
 				PeerID:     c.id,
 				Port:       int64(c.port),
-				Uploaded:   t.Uploaded,
-				Downloaded: t.Downloaded,
-				Left:       t.Torrent.BytesToDownload() - t.Downloaded,
+				Uploaded:   t.Uploaded.Load(),
+				Downloaded: t.Downloaded.Load(),
+				Left:       t.Torrent.BytesToDownload() - t.Downloaded.Load(),
 				Compact:    tracker.Optional[int64](1),
 				Event:      tracker.Optional(tracker.EventStopped),
 				TrackerID:  start.TrackerID,
@@ -217,31 +226,15 @@ tracker:
 				slog.String("infoHash", infoHash),
 			)
 
-			if err := t.Stop(); err != nil {
-				c.logger.Info("failed to close connections to some of the peers.",
+			if err := t.Close(); err != nil {
+				c.logger.Info("failed to close torrent tracker",
 					slog.String("err", err.Error()),
 					slog.String("infoHash", infoHash),
 					slog.String("url", t.Torrent.Announce),
 				)
 			}
-
 			c.wg.Done()
 			return
-		case <-keepAlive.C:
-			c.logger.Info("sending keep alive event on torrent peers",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-			)
-			for _, p := range t.Peers {
-				if err := p.KeepAlive(); err != nil {
-					c.logger.Error("failed to keep alive",
-						slog.String("err", err.Error()),
-						slog.String("infoHash", infoHash),
-						slog.String("url", t.Torrent.Announce),
-						slog.String("peer", p.Id),
-					)
-				}
-			}
 		case <-ticker.C:
 			c.logger.Info("sending regular update based on interval",
 				slog.String("infoHash", infoHash),
@@ -249,16 +242,16 @@ tracker:
 				slog.String("peers", fmt.Sprint(start.Peers)),
 			)
 			var event *tracker.Event
-			if completed := (t.Torrent.BytesToDownload() - t.Downloaded) == 0; completed {
+			if completed := (t.Torrent.BytesToDownload() - t.Downloaded.Load()) == 0; completed {
 				event = tracker.Optional(tracker.EventCompleted)
 			}
 			update, err := tracker.CreateRequest(context.Background(), t.Torrent.Announce, &tracker.RequestParams{
 				InfoHash:   infoHash,
 				PeerID:     c.id,
 				Port:       int64(c.port),
-				Uploaded:   t.Uploaded,
-				Downloaded: t.Downloaded,
-				Left:       t.Torrent.BytesToDownload() - t.Downloaded,
+				Uploaded:   t.Uploaded.Load(),
+				Downloaded: t.Downloaded.Load(),
+				Left:       t.Torrent.BytesToDownload() - t.Downloaded.Load(),
 				Compact:    tracker.Optional[int64](1),
 				Event:      event,
 				TrackerID:  start.TrackerID,
@@ -277,7 +270,7 @@ tracker:
 				)
 				return
 			}
-			if err := t.UpdatePeers(c.id, c.logger, update); err != nil {
+			if err := t.UpdatePeers(update); err != nil {
 				c.logger.Error("failed to update peers, attempting to continue",
 					slog.String("err", err.Error()),
 					slog.String("infoHash", infoHash),

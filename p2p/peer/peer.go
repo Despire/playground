@@ -2,10 +2,13 @@ package peer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"github.com/Despire/tinytorrent/p2p/peer/bitfield"
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -63,20 +66,23 @@ type Peer struct {
 	Id     string
 	Addr   string
 
+	wg               sync.WaitGroup
 	conn             net.Conn
-	ConnectionStatus atomic.Int32
+	ConnectionStatus atomic.Uint32
 
 	Status struct {
-		Remote Status
-		This   Status
+		Remote atomic.Uint32
+		This   atomic.Uint32
 	}
 
 	Interest struct {
-		Remote Interest
-		This   Interest
+		Remote atomic.Uint32
+		This   atomic.Uint32
 	}
 
-	bitfield *BitField
+	pieces chan *messagesv1.Piece
+
+	Bitfield *bitfield.BitField
 }
 
 func New(logger *slog.Logger, id, addr string, blocks int64, overflow bool) (*Peer, error) {
@@ -93,34 +99,64 @@ func New(logger *slog.Logger, id, addr string, blocks int64, overflow bool) (*Pe
 		Id:       id,
 		Addr:     addr,
 		conn:     conn,
-		bitfield: NewBitfield(blocks, overflow),
+		wg:       sync.WaitGroup{},
+		Bitfield: bitfield.NewBitfield(blocks, overflow),
 	}
 
-	p.ConnectionStatus.Store(int32(ConnectionPending))
+	p.ConnectionStatus.Store(uint32(ConnectionPending))
 
-	p.Status.Remote = Choked
-	p.Status.This = Choked
+	p.Status.Remote.Store(uint32(Choked))
+	p.Status.This.Store(uint32(Choked))
 
-	p.Interest.Remote = NotInterested
-	p.Interest.This = NotInterested
+	p.Interest.Remote.Store(uint32(NotInterested))
+	p.Interest.This.Store(uint32(NotInterested))
+
+	p.pieces = make(chan *messagesv1.Piece)
 
 	return p, nil
 }
 
+func (p *Peer) Pieces() <-chan *messagesv1.Piece { return p.pieces }
+
 func (p *Peer) Close() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionKilled) {
-		p.ConnectionStatus.Store(int32(ConnectionKilled))
+	if p.ConnectionStatus.Load() != uint32(ConnectionKilled) {
+		p.ConnectionStatus.Store(uint32(ConnectionKilled))
+		p.wg.Wait()
 		return p.conn.Close()
 	}
 	return nil
 }
 
-// HandshakeV1 performs the handshake according to the version 1.0
+func (p *Peer) Reconnect() error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionKilled) {
+		return errors.New("cannot re-connect on non-killed connection")
+	}
+
+	var err error
+	p.conn, err = net.DialTimeout("tcp", p.Addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to re-connect to peer at %s: %w", p.Addr, err)
+	}
+
+	p.ConnectionStatus.Store(uint32(ConnectionPending))
+
+	p.Status.Remote.Store(uint32(Choked))
+	p.Status.This.Store(uint32(Choked))
+
+	p.Interest.Remote.Store(uint32(NotInterested))
+	p.Interest.This.Store(uint32(NotInterested))
+
+	p.pieces = make(chan *messagesv1.Piece)
+
+	return nil
+}
+
+// InitiateHandshakeV1 performs the handshake according to the version 1.0
 // of the specifications. After a successful handshake a new goroutine
 // is spawned that actively listens. on the established BitTorrent
 // channel to decode incoming messages.
-func (p *Peer) HandshakeV1(infoHash, peerID string) error {
-	if p.ConnectionStatus.Load() == int32(ConnectionEstablished) {
+func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
+	if p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
 		return nil
 	}
 
@@ -169,15 +205,16 @@ func (p *Peer) HandshakeV1(infoHash, peerID string) error {
 		p.Id = h.PeerID
 		p.logger = p.logger.With(slog.String("peer_id", p.Id))
 	}
-	p.ConnectionStatus.Store(int32(ConnectionEstablished))
+	p.ConnectionStatus.Store(uint32(ConnectionEstablished))
 
+	p.wg.Add(1)
 	go p.listener()
 
 	return nil
 }
 
-func (p *Peer) KeepAlive() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+func (p *Peer) SendKeepAlive() error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
 			ConnectionStatus(p.ConnectionStatus.Load()),
 			ConnectionEstablished,
@@ -196,8 +233,8 @@ func (p *Peer) KeepAlive() error {
 	return nil
 }
 
-func (p *Peer) Unchoke() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+func (p *Peer) SendUnchoke() error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
 			ConnectionStatus(p.ConnectionStatus.Load()),
 			ConnectionEstablished,
@@ -212,12 +249,12 @@ func (p *Peer) Unchoke() error {
 	if int(w) != len(msg) {
 		return fmt.Errorf("failed to write all of the unchoke message")
 	}
-	p.Status.This = UnChoked
+	p.Status.This.Store(uint32(UnChoked))
 	return nil
 }
 
-func (p *Peer) Choke() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+func (p *Peer) SendChoke() error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
 			ConnectionStatus(p.ConnectionStatus.Load()),
 			ConnectionEstablished,
@@ -232,12 +269,12 @@ func (p *Peer) Choke() error {
 	if int(w) != len(msg) {
 		return fmt.Errorf("failed to write all of the choke message")
 	}
-	p.Status.This = Choked
+	p.Status.This.Store(uint32(Choked))
 	return nil
 }
 
-func (p *Peer) Interested() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+func (p *Peer) SendInterested() error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
 			ConnectionStatus(p.ConnectionStatus.Load()),
 			ConnectionEstablished,
@@ -252,12 +289,12 @@ func (p *Peer) Interested() error {
 	if int(w) != len(msg) {
 		return fmt.Errorf("failed to write all of the interest message")
 	}
-	p.Interest.This = Interested
+	p.Interest.This.Store(uint32(Interested))
 	return nil
 }
 
-func (p *Peer) NotInterested() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+func (p *Peer) SendNotInterested() error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
 			ConnectionStatus(p.ConnectionStatus.Load()),
 			ConnectionEstablished,
@@ -272,25 +309,71 @@ func (p *Peer) NotInterested() error {
 	if int(w) != len(msg) {
 		return fmt.Errorf("failed to write all of the not-interest message")
 	}
-	p.Interest.This = NotInterested
+	p.Interest.This.Store(uint32(NotInterested))
 	return nil
 }
 
-func (p *Peer) Bitfield() error {
-	if p.ConnectionStatus.Load() != int32(ConnectionEstablished) {
+func (p *Peer) SendBitfield(b []byte) error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
 			ConnectionStatus(p.ConnectionStatus.Load()),
 			ConnectionEstablished,
 		)
 	}
 
-	msg := (&messagesv1.Bitfield{Bitfield: p.bitfield.B}).Serialize()
+	msg := (&messagesv1.Bitfield{Bitfield: b}).Serialize()
 	w, err := io.Copy(p.conn, bytes.NewReader(msg))
 	if err != nil {
 		return fmt.Errorf("failed to write bitfield message: %w", err)
 	}
 	if int(w) != len(msg) {
 		return fmt.Errorf("failed to write all of bitfield message")
+	}
+	return nil
+}
+
+func (p *Peer) SendRequest(req *messagesv1.Request) error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	if err := req.Validate(); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+
+	msg := req.Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write request message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of request message")
+	}
+	return nil
+}
+
+func (p *Peer) SendCancel(cancel *messagesv1.Cancel) error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	if err := cancel.Validate(); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+
+	msg := cancel.Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write request message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of request message")
 	}
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 )
 
+const RequestSize = 1024 * 16
+
 type Request struct {
 	Index  uint32
 	Begin  uint32
@@ -37,7 +39,7 @@ func (r *Request) Deserialize(data []byte) error {
 }
 
 func (r *Request) Validate() error {
-	if r.Length != 16*1024 {
+	if r.Length > 16*1024 {
 		return errors.New("length is not 2^14kb")
 	}
 	return nil
