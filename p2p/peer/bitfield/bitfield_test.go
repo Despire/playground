@@ -119,3 +119,36 @@ func TestBitField_MissingPieces(t *testing.T) {
 		})
 	}
 }
+
+func Test_ExistingPieces(t *testing.T) {
+	t.Parallel()
+
+	pieces := []uint32{
+		9,
+		837,
+		586,
+		358,
+		854,
+		459,
+		177,
+		803,
+		1436,
+		791,
+		241,
+		1936,
+		535,
+		1781,
+		556,
+		842,
+		172,
+	}
+
+	b := NewBitfield(264, true)
+	for _, p := range pieces {
+		b.Set(p)
+	}
+
+	if len(b.ExistingPieces()) != len(pieces) {
+		t.Errorf("mismatch existing pieces not equal to inserted amount")
+	}
+}

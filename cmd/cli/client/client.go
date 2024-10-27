@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -64,7 +67,7 @@ func New(opts ...Option) (*Client, error) {
 	return p, nil
 }
 
-func (p *Client) Close() error { close(p.done); return nil }
+func (p *Client) Close() error { close(p.done); p.wg.Wait(); return nil }
 
 func (p *Client) WorkOn(t *torrent.MetaInfoFile) (string, error) {
 	h := string(t.Metadata.Hash[:])
@@ -73,36 +76,83 @@ func (p *Client) WorkOn(t *torrent.MetaInfoFile) (string, error) {
 		return "", fmt.Errorf("torrent with hash %s is already tracked", h)
 	}
 
-	p.torrentsDownloading.Store(h, status.NewTracker(p.id, p.logger, t, TorrentDir))
+	tr, err := status.NewTracker(p.id, p.logger, t, TorrentDir)
+	if err != nil {
+		return "", err
+	}
+
+	p.torrentsDownloading.Store(h, tr)
 
 	p.handler <- h
 	return h, nil
 }
 
 func (p *Client) WaitFor(id string) <-chan error {
-	r := make(chan error)
+	r := make(chan error, 1)
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
 		defer close(r)
+		s, ok := p.torrentsDownloading.Load(id)
+		if !ok {
+			r <- fmt.Errorf("torrent with id %s was not found, its possible that it was tracked but was deleted midway", id)
+			return
+		}
+
+		tr := s.(*status.Tracker)
 		for {
 			select {
 			case <-p.done:
 				r <- errors.New("client shutting down")
 				return
-			default:
-				s, ok := p.torrentsDownloading.Load(id)
-				if !ok {
-					r <- fmt.Errorf("torrent with id %s was not found, its possible that it was tracked but was deleted midway", id)
-					return
-				}
+			case <-tr.WaitUntilDownloaded():
+				switch {
+				case tr.Torrent.InfoSingleFile != nil:
+					final, err := os.Create(filepath.Join(tr.DownloadDir, tr.Torrent.InfoSingleFile.Name))
+					if err != nil {
+						r <- fmt.Errorf("failed to create torrent file for merging pieces: %w", err)
+						break
+					}
 
-				p := s.(*status.Tracker)
-				if p.Torrent.BytesToDownload() == p.Downloaded.Load() {
-					return
-				}
+					pcs := tr.BitField.ExistingPieces()
+					slices.Sort(pcs)
 
-				time.Sleep(10 * time.Second)
+					q := tr.Torrent.NumPieces()
+					_ = q
+
+					copied := int64(0)
+					var errAll error
+					for _, i := range pcs {
+						path := filepath.Join(tr.DownloadDir, fmt.Sprintf("%v.bin", i))
+						f, err := os.Open(path)
+						if err != nil {
+							errAll = errors.Join(errAll, fmt.Errorf("failed to open file for piece %v", i))
+							continue
+						}
+
+						w, err := io.Copy(final, f)
+						if err != nil {
+							errAll = errors.Join(errAll, fmt.Errorf("failed to copy piece %v to final merging file: %w", i, err))
+							continue
+						}
+
+						copied += w
+					}
+
+					// TODO: add bandwith
+					// TODO: Put a timer on the send requests received responses to avoid a deadlock.
+					if copied != tr.Torrent.InfoSingleFile.Length {
+						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", copied, tr.Torrent.InfoSingleFile.Length))
+					}
+
+					if errAll != nil {
+						r <- fmt.Errorf("failed to reconstruct downloaded torrent: %w", errAll)
+					}
+				case tr.Torrent.InfoMultiFile != nil:
+					// TODO: implement.
+					r <- fmt.Errorf("multi file assembly not yet implemented")
+				}
+				return
 			}
 		}
 	}()
@@ -121,15 +171,24 @@ func (p *Client) watch() {
 			go p.downloadTorrent(ctx, infoHash, t.(*status.Tracker))
 		case <-p.done:
 			cancel()
-			p.logger.Info("received signal to stop, waiting for all goroutines to finish")
-			p.wg.Wait()
+			p.logger.Info("received signal to stop, stopping all torrents")
+
+			p.torrentsDownloading.Range(func(key, value any) bool {
+				id := key.(string)
+				tr := value.(*status.Tracker)
+				if err := tr.Close(); err != nil {
+					p.logger.Error("failed to stop torrent", slog.String("torrent", id))
+				}
+				return true
+			})
+			p.torrentsDownloading.Clear()
 			return
 		}
 	}
 }
 
 func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status.Tracker) {
-	const defaultPeerCount = 10
+	const defaultPeerCount = 15
 
 	var start *tracker.Response
 
@@ -182,7 +241,7 @@ tracker:
 		slog.String("interval", fmt.Sprint(*start.Interval)),
 	)
 
-	if err := t.UpdatePeers(start); err != nil {
+	if err := t.UpdateSeeders(start); err != nil {
 		c.logger.Error("failed to update peers, attempting to continue",
 			slog.String("err", err.Error()),
 			slog.String("infoHash", infoHash),
@@ -221,25 +280,44 @@ tracker:
 				)
 			}
 
-			c.logger.Info("closing peers",
+			c.logger.Info("stopping download, context canceled",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
 			)
 
-			if err := t.Close(); err != nil {
-				c.logger.Info("failed to close torrent tracker",
+			t.CancelDownload()
+			c.wg.Done()
+			return
+		case <-t.WaitUntilDownloaded():
+			c.logger.Info("sending completed update, finished downloaded torrent",
+				slog.String("infoHash", infoHash),
+				slog.String("url", t.Torrent.Announce),
+			)
+			_, err := tracker.CreateRequest(context.Background(), t.Torrent.Announce, &tracker.RequestParams{
+				InfoHash:   infoHash,
+				PeerID:     c.id,
+				Port:       int64(c.port),
+				Uploaded:   t.Uploaded.Load(),
+				Downloaded: t.Downloaded.Load(),
+				Left:       t.Torrent.BytesToDownload() - t.Downloaded.Load(),
+				Compact:    tracker.Optional[int64](1),
+				Event:      tracker.Optional(tracker.EventCompleted),
+				TrackerID:  start.TrackerID,
+			})
+			if err != nil {
+				c.logger.Error("failed announce completed event to tracker",
 					slog.String("err", err.Error()),
 					slog.String("infoHash", infoHash),
 					slog.String("url", t.Torrent.Announce),
 				)
 			}
+			t.CancelDownload()
 			c.wg.Done()
 			return
 		case <-ticker.C:
 			c.logger.Info("sending regular update based on interval",
 				slog.String("infoHash", infoHash),
 				slog.String("url", t.Torrent.Announce),
-				slog.String("peers", fmt.Sprint(start.Peers)),
 			)
 			var event *tracker.Event
 			if completed := (t.Torrent.BytesToDownload() - t.Downloaded.Load()) == 0; completed {
@@ -268,9 +346,11 @@ tracker:
 					slog.String("infoHash", infoHash),
 					slog.String("url", t.Torrent.Announce),
 				)
+				t.CancelDownload()
+				c.wg.Done()
 				return
 			}
-			if err := t.UpdatePeers(update); err != nil {
+			if err := t.UpdateSeeders(update); err != nil {
 				c.logger.Error("failed to update peers, attempting to continue",
 					slog.String("err", err.Error()),
 					slog.String("infoHash", infoHash),

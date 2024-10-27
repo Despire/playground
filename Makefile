@@ -30,3 +30,10 @@ build:
 	-ldflags="-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Date=${BUILD_DATE}'\
 	-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Version=${VERSION}'\
 	-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Hash=${HASH}'"  ./cmd/cli
+
+.PHONY: build
+build-release:
+	$(GO) build -o bin/tinytorrent \
+	-ldflags="-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Date=${BUILD_DATE}'\
+	-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Version=${VERSION}'\
+	-X 'github.com/Despire/tinytorrent/cmd/cli/client/internal/build.Hash=${HASH}'"  ./cmd/cli

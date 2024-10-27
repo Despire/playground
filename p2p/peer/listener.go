@@ -49,11 +49,11 @@ func (p *Peer) listener() {
 		}
 	}
 
-	p.logger.Info("peer connection shutting down")
-
+	p.ConnectionStatus.Store(uint32(ConnectionKilled))
 	close(p.pieces)
-
 	p.wg.Done()
+
+	p.logger.Debug("peer connection shutting down")
 }
 
 func (p *Peer) process(msg *messagesv1.Message) error {

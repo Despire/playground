@@ -35,11 +35,36 @@ func (b *BitField) MissingPieces() []uint32 {
 		pcs -= 7
 	}
 
-	for i := 0; i < pcs; i++ {
+	for i := 0; i <= pcs; i++ {
 		o := b.byteOffset(uint32(i))
 		_ = b.b[o] // bounds check
 		piece := b.bitOffset(uint32(i))
-		if (b.b[o] & 1 << (((1 << 3) - 1) - piece)) == 0 {
+		shift := ((1 << 3) - 1) - piece
+		if (b.b[o] & (1 << shift)) == 0 {
+			pieces = append(pieces, uint32(i))
+		}
+	}
+
+	return pieces
+}
+
+func (b *BitField) ExistingPieces() []uint32 {
+	var pieces []uint32
+
+	b.l.Lock()
+	defer b.l.Unlock()
+
+	pcs := len(b.b) * 8
+	if b.barrier != nil {
+		pcs -= 7
+	}
+
+	for i := 0; i <= pcs; i++ {
+		o := b.byteOffset(uint32(i))
+		_ = b.b[o] // bounds check
+		piece := b.bitOffset(uint32(i))
+		shift := ((1 << 3) - 1) - piece
+		if (b.b[o] & (1 << shift)) != 0 {
 			pieces = append(pieces, uint32(i))
 		}
 	}
@@ -93,7 +118,8 @@ func (b *BitField) SetWithCheck(idx uint32) error {
 	o := b.byteOffset(idx)
 	_ = b.b[o] // bounds check
 	piece := b.bitOffset(idx)
-	b.b[o] ^= 1 << (((1 << 3) - 1) - piece)
+	shift := ((1 << 3) - 1) - piece
+	b.b[o] ^= 1 << shift
 	return nil
 }
 
@@ -104,7 +130,8 @@ func (b *BitField) Set(idx uint32) {
 	o := b.byteOffset(idx)
 	_ = b.b[o] // bounds check
 	piece := b.bitOffset(idx)
-	b.b[o] ^= 1 << (((1 << 3) - 1) - piece)
+	shift := ((1 << 3) - 1) - piece
+	b.b[o] ^= 1 << shift
 }
 
 func (b *BitField) Check(idx uint32) bool {
