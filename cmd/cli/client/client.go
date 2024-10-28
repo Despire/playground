@@ -139,8 +139,6 @@ func (p *Client) WaitFor(id string) <-chan error {
 						copied += w
 					}
 
-					// TODO: add bandwith
-					// TODO: Put a timer on the send requests received responses to avoid a deadlock.
 					if copied != tr.Torrent.InfoSingleFile.Length {
 						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", copied, tr.Torrent.InfoSingleFile.Length))
 					}

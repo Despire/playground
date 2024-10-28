@@ -16,13 +16,10 @@ import (
 	"github.com/Despire/tinytorrent/p2p/peer"
 )
 
-func (t *Tracker) CancelDownload()                      { close(t.cancelDownload); t.downloadWg.Wait() }
-func (t *Tracker) WaitUntilDownloaded() <-chan struct{} { return t.downloaded }
+func (t *Tracker) CancelDownload()                      { close(t.download.cancel); t.download.wg.Wait() }
+func (t *Tracker) WaitUntilDownloaded() <-chan struct{} { return t.download.completed }
 
 func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
-	t.peers.l.Lock()
-	defer t.peers.l.Unlock()
-
 	var errAll error
 
 	for _, r := range resp.Peers {
@@ -32,14 +29,15 @@ func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
 			slog.String("url", t.Torrent.Announce),
 			slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
 		)
-		if _, ok := t.peers.seeders[addr]; ok {
+		if _, ok := t.peers.seeders.Load(addr); ok {
 			continue
 		}
 
 		blocks, overflow := t.Torrent.NumBlocks()
-		t.peers.seeders[addr] = peer.New(t.logger, r.PeerID, addr, blocks, overflow)
-		t.downloadWg.Add(1)
-		go t.keepAliveSeeders(t.peers.seeders[addr])
+		np := peer.New(t.logger, r.PeerID, addr, blocks, overflow)
+		t.peers.seeders.Store(addr, np)
+		t.download.wg.Add(1)
+		go t.keepAliveSeeders(np)
 	}
 
 	return errAll
@@ -54,6 +52,8 @@ func (t *Tracker) downloadScheduler() {
 		unverified[i], unverified[j] = unverified[j], unverified[i]
 	})
 
+	currentRate := int64(0)
+	rateTicker := time.NewTicker(rateTick)
 	for {
 		select {
 		case <-t.stop:
@@ -61,40 +61,83 @@ func (t *Tracker) downloadScheduler() {
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
 			)
-			t.downloadWg.Done()
+			t.download.wg.Done()
 			return
-		case <-t.cancelDownload:
+		case <-t.download.cancel:
 			t.logger.Info("shutting down piece downloader, canceled download",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
 			)
-			t.downloadWg.Done()
+			t.download.wg.Done()
 			return
+		case <-rateTicker.C:
+			newRate := t.Downloaded.Load()
+			diff := newRate - currentRate
+			t.download.rate.Store(diff)
+			currentRate = newRate
 		default:
 			freeSlots := 0
-			for i := range t.requests {
-				p := t.requests[i].Load()
+			for i := range t.download.requests {
+				p := t.download.requests[i].Load()
 				if p == nil {
 					freeSlots++
 					continue
 				}
 
 				p.l.Lock()
+
+				// reschedule long running requests.
+				for send := 0; send < len(p.InFlight); send++ {
+					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 30*time.Second {
+						t.peers.seeders.Range(func(_, value any) bool {
+							p := value.(*peer.Peer)
+							canCancel := p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished)
+							canCancel = canCancel && p.Status.Remote.Load() == uint32(peer.UnChoked)
+							if canCancel {
+								err := p.SendCancel(&messagesv1.Cancel{
+									Index:  req.request.Index,
+									Begin:  req.request.Begin,
+									Length: req.request.Length,
+								})
+								if err != nil {
+									t.logger.Error("failed to cancel request",
+										slog.String("peer", p.Id),
+										slog.String("url", t.Torrent.Announce),
+										slog.String("infoHash", infoHash),
+										slog.String("err", err.Error()),
+										slog.String("req", fmt.Sprintf("%#v", req)),
+									)
+								}
+							}
+							return true
+						})
+
+						p.Pending = append(p.Pending, &messagesv1.Request{
+							Index:  req.request.Index,
+							Begin:  req.request.Begin,
+							Length: req.request.Length,
+						})
+						p.InFlight[send] = nil
+					}
+				}
+				p.InFlight = slices.DeleteFunc(p.InFlight, func(r *timedRequest) bool { return r == nil })
+
+				// schedule pending requests to peers.
 				for send := 0; send < len(p.Pending); send++ {
 					piece := p.Pending[send]
 					// select peer to contact for piece.
 					var peers []*peer.Peer
 
-					t.peers.l.Lock()
-					for _, p := range t.peers.seeders {
+					t.peers.seeders.Range(func(_, value any) bool {
+						p := value.(*peer.Peer)
 						canRequest := p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished)
 						canRequest = canRequest && p.Status.Remote.Load() == uint32(peer.UnChoked)
 						canRequest = canRequest && p.Bitfield.Check(piece.Index)
 						if canRequest {
 							peers = append(peers, p)
 						}
-					}
-					t.peers.l.Unlock()
+						return true
+					})
 
 					if len(peers) == 0 {
 						t.logger.Warn("no peers online that contain needed piece",
@@ -126,28 +169,31 @@ func (t *Tracker) downloadScheduler() {
 					}
 
 					p.Pending[send] = nil
-					p.InFlight = append(p.InFlight, piece)
+					p.InFlight = append(p.InFlight, &timedRequest{
+						request: *piece,
+						send:    time.Now(),
+					})
 				}
 				p.Pending = slices.DeleteFunc(p.Pending, func(r *messagesv1.Request) bool { return r == nil })
 				p.l.Unlock()
 			}
 
 			if len(unverified) == 0 { // we can't process any new pieces, wait for pending to finish.
-				if freeSlots == len(t.requests) {
+				if freeSlots == len(t.download.requests) {
 					t.logger.Info("Downloaded all pieces shutting down piece downloader",
 						slog.String("url", t.Torrent.Announce),
 						slog.String("infoHash", infoHash),
 					)
-					close(t.downloaded)
-					t.downloadWg.Done()
+					close(t.download.completed)
+					t.download.wg.Done()
 					return
 				}
 				continue
 			}
 
 			slot := -1
-			for i := range t.requests {
-				if t.requests[i].Load() == nil {
+			for i := range t.download.requests {
+				if t.download.requests[i].Load() == nil {
 					slot = i
 					break
 				}
@@ -186,7 +232,7 @@ func (t *Tracker) downloadScheduler() {
 				p += nextBlockSize
 			}
 
-			if !t.requests[slot].CompareAndSwap(nil, pending) {
+			if !t.download.requests[slot].CompareAndSwap(nil, pending) {
 				continue // slot was taken away.
 			}
 
@@ -207,14 +253,14 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 					slog.String("url", t.Torrent.Announce),
 					slog.String("infoHash", infoHash),
 				)
-				t.downloadWg.Done()
+				t.download.wg.Done()
 				return
 			}
 
 			pieceIdx := -1
 			var piece *pendingPiece
-			for i := range t.requests {
-				if r := t.requests[i].Load(); r != nil && r.Index == recv.Index {
+			for i := range t.download.requests {
+				if r := t.download.requests[i].Load(); r != nil && r.Index == recv.Index {
 					piece = r
 					pieceIdx = i
 					break
@@ -232,13 +278,12 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 
 			piece.l.Lock()
 
-			req := slices.IndexFunc(piece.InFlight, func(r *messagesv1.Request) bool {
-				req := messagesv1.Request{
+			req := slices.IndexFunc(piece.InFlight, func(r *timedRequest) bool {
+				return r.request == messagesv1.Request{
 					Index:  recv.Index,
 					Begin:  recv.Begin,
 					Length: uint32(len(recv.Block)),
 				}
-				return r != nil && *r == req
 			})
 
 			if req < 0 {
@@ -275,8 +320,10 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 				piece.l.Unlock()
 				panic(fmt.Sprintf("recieved more data than expected for piece %v", recv.Index))
 			}
+			total := t.Downloaded.Add(int64(len(recv.Block)))
 
 			piece.Received = append(piece.Received, recv)
+			piece.InFlight[req].received = true // mark as received to it won't be rescheduled again.
 
 			status := float64(piece.Downloaded) / float64(piece.Size)
 			status *= 100
@@ -289,7 +336,7 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 				slog.String("status", fmt.Sprintf("%.2f%%", status)),
 			)
 
-			if piece.Downloaded == piece.Size { // verify
+			if piece.Downloaded == piece.Size {
 				slices.SortFunc(piece.Received, func(a, b *messagesv1.Piece) int { return cmp.Compare(a.Begin, b.Begin) })
 				var data []byte
 				for _, d := range piece.Received {
@@ -317,7 +364,14 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 						piece.l.Unlock()
 						panic("malformed state, expected no pending requests when rescheduling piece for retry download")
 					}
-					piece.Pending = append(piece.Pending, piece.InFlight...)
+					for _, tr := range piece.InFlight {
+						piece.Pending = append(piece.Pending, &messagesv1.Request{
+							Index:  tr.request.Index,
+							Begin:  tr.request.Begin,
+							Length: tr.request.Length,
+						})
+					}
+					piece.InFlight = nil
 					piece.Received = nil
 					piece.l.Unlock()
 					continue
@@ -336,7 +390,14 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 						piece.l.Unlock()
 						panic("malformed state, expected no pending requests when rescheduling piece for retry download")
 					}
-					piece.Pending = append(piece.Pending, piece.InFlight...)
+					for _, tr := range piece.InFlight {
+						piece.Pending = append(piece.Pending, &messagesv1.Request{
+							Index:  tr.request.Index,
+							Begin:  tr.request.Begin,
+							Length: tr.request.Length,
+						})
+					}
+					piece.InFlight = nil
 					piece.Received = nil
 					piece.l.Unlock()
 					continue
@@ -344,14 +405,14 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 
 				t.BitField.Set(recv.Index)
 
-				t.peers.l.Lock()
 				t.logger.Debug("sending have message for verified piece",
 					slog.String("url", t.Torrent.Announce),
 					slog.String("infoHash", infoHash),
 					slog.String("piece", fmt.Sprint(recv.Index)),
 				)
-				for _, p := range t.peers.seeders {
-					if p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished) {
+
+				t.peers.seeders.Range(func(_, value any) bool {
+					if p := value.(*peer.Peer); p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished) {
 						if err := p.SendHave(&messagesv1.Have{Index: recv.Index}); err != nil {
 							t.logger.Error("failed to send have piece, after verifying",
 								slog.String("end_peer", p.Id),
@@ -362,19 +423,20 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 							)
 						}
 					}
-				}
-				t.peers.l.Unlock()
+					return true
+				})
 
-				total := t.Downloaded.Add(piece.Size)
 				t.logger.Info("piece verified successfully",
 					slog.String("status", fmt.Sprintf("%.2f%%", (float64(total)/float64(t.Torrent.BytesToDownload()))*100)),
+					slog.String("kbps", fmt.Sprintf("%.2f", (float64(t.download.rate.Load())/1000.0)*100)),
 					slog.String("piece", fmt.Sprint(recv.Index)),
 					slog.String("peer", pid),
 					slog.String("url", t.Torrent.Announce),
 					slog.String("infoHash", infoHash),
 				)
 
-				if !t.requests[pieceIdx].CompareAndSwap(piece, nil) {
+				// make place for a new piece to be scheduled.
+				if !t.download.requests[pieceIdx].CompareAndSwap(piece, nil) {
 					t.logger.Warn("two go-routines verified same piece",
 						slog.String("peer", pid),
 						slog.String("url", t.Torrent.Announce),
@@ -409,9 +471,9 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 					slog.String("err", err.Error()),
 				)
 			}
-			t.downloadWg.Done()
+			t.download.wg.Done()
 			return
-		case <-t.cancelDownload:
+		case <-t.download.cancel:
 			t.logger.Info("shutting down peer refresher, canceled download",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
@@ -426,9 +488,9 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 					slog.String("err", err.Error()),
 				)
 			}
-			t.downloadWg.Done()
+			t.download.wg.Done()
 			return
-		case <-t.downloaded:
+		case <-t.download.completed:
 			t.logger.Debug("shutting down peer refresher, as torrent was downloaded",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
@@ -443,7 +505,7 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 					slog.String("err", err.Error()),
 				)
 			}
-			t.downloadWg.Done()
+			t.download.wg.Done()
 			return
 		case <-refresh.C:
 			refresh.Reset(2 * time.Minute)
@@ -507,7 +569,7 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 					)
 				}
 				// Listen for pieces.
-				t.downloadWg.Add(1)
+				t.download.wg.Add(1)
 				go t.recvPieces(p)
 			case peer.ConnectionEstablished:
 				t.logger.Info("sending keep alive event on torrent peers",

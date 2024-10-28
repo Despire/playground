@@ -107,11 +107,13 @@ func (p *Peer) Pieces() <-chan *messagesv1.Piece { return p.pieces }
 
 func (p *Peer) Close() error {
 	if p.ConnectionStatus.Load() != uint32(ConnectionKilled) {
-		p.ConnectionStatus.Store(uint32(ConnectionKilled))
+		var err error
 		if p.conn != nil {
-			return p.conn.Close()
+			err = p.conn.Close()
 		}
+		p.ConnectionStatus.Store(uint32(ConnectionKilled))
 		p.wg.Wait()
+		return err
 	}
 	return nil
 }

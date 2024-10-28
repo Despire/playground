@@ -11,12 +11,18 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Despire/tinytorrent/p2p/messagesv1"
-	"github.com/Despire/tinytorrent/p2p/peer"
 	"github.com/Despire/tinytorrent/p2p/peer/bitfield"
 	"github.com/Despire/tinytorrent/torrent"
 )
+
+type timedRequest struct {
+	request  messagesv1.Request
+	send     time.Time
+	received bool
+}
 
 type pendingPiece struct {
 	// l guards against concurrent accesses
@@ -28,15 +34,34 @@ type pendingPiece struct {
 	Size       int64
 	Received   []*messagesv1.Piece
 	Pending    []*messagesv1.Request
-	InFlight   []*messagesv1.Request
+	InFlight   []*timedRequest
 }
 
 type peers struct {
-	// l guards against concurrent accesses
-	// for the peers map. Useful to have
-	// a consistent snapshot.
-	l       sync.Mutex
-	seeders map[string]*peer.Peer
+	seeders sync.Map
+}
+
+// How often the rate of bytes downloaded is updated.
+const rateTick = 1 * time.Second
+
+type Download struct {
+	// Requests are the number of pieces concurrently
+	// downloaded. No more than len(requests) pieces
+	// are downloaded at a time.
+	requests [14]atomic.Pointer[pendingPiece]
+	// Download Related signaling. The downloadWg
+	// is used when spawning download related goroutines.
+	wg sync.WaitGroup
+	// Download related signaling. When the torrent
+	// finishes downloading the downloaded channel is
+	// closed. Futher another API is exposed that
+	// allows the application code to only cancel
+	// the downloads and keep other workflows
+	// running, such as seeding.
+	cancel, completed chan struct{}
+	// Rate is the number of bytes downloaded for the
+	// last 10 seconds.
+	rate atomic.Int64
 }
 
 // Tracker wraps all necessary information for tracking
@@ -45,24 +70,12 @@ type Tracker struct {
 	clientID string
 	logger   *slog.Logger
 
-	// Requests are the number of pieces concurrently
-	// downloaded. No more than len(requests) pieces
-	// are downloaded.
-	requests [8]atomic.Pointer[pendingPiece]
 	// Peers are the seeders and leechers that are known
 	// to this torrent tracker.
 	peers peers
 
-	// Download Related signaling. The downloadWg
-	// is used when spawning download related goroutines.
-	downloadWg sync.WaitGroup
-	// Download related signaling. When the torrent
-	// finishes downloading the downloaded channel is
-	// closed. Futher another API is exposed that
-	// allows the application code to only cancel
-	// the downloads and keep other workflows
-	// running, such as seeding.
-	cancelDownload, downloaded chan struct{}
+	// download wraps all download related information.
+	download Download
 
 	// Stop channel indicates the the application was shutdown
 	// By closing this channel all workflows will finish
@@ -78,20 +91,18 @@ type Tracker struct {
 
 func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, downloadDir string) (*Tracker, error) {
 	tr := Tracker{
-		clientID:       clientID,
-		logger:         logger,
-		cancelDownload: make(chan struct{}),
-		downloaded:     make(chan struct{}),
-		stop:           make(chan struct{}),
-		downloadWg:     sync.WaitGroup{},
-		Torrent:        t,
-		BitField:       bitfield.NewBitfield(t.NumBlocks()),
-		Uploaded:       atomic.Int64{},
-		Downloaded:     atomic.Int64{},
-		DownloadDir:    path.Join(downloadDir, hex.EncodeToString(t.Info.Metadata.Hash[:])),
+		clientID:    clientID,
+		logger:      logger,
+		stop:        make(chan struct{}),
+		Torrent:     t,
+		BitField:    bitfield.NewBitfield(t.NumBlocks()),
+		Uploaded:    atomic.Int64{},
+		Downloaded:  atomic.Int64{},
+		DownloadDir: path.Join(downloadDir, hex.EncodeToString(t.Info.Metadata.Hash[:])),
 	}
 
-	tr.peers.seeders = make(map[string]*peer.Peer)
+	tr.download.cancel = make(chan struct{})
+	tr.download.completed = make(chan struct{})
 
 	// read bitfield if exists.
 	f, err := os.Open(filepath.Join(tr.DownloadDir, "bitfield.bin"))
@@ -113,7 +124,7 @@ func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, d
 		}
 	}
 
-	tr.downloadWg.Add(1)
+	tr.download.wg.Add(1)
 	go tr.downloadScheduler()
 	return &tr, nil
 }
@@ -133,7 +144,7 @@ func (t *Tracker) Close() error {
 		}
 	}
 	close(t.stop)
-	t.downloadWg.Wait()
+	t.download.wg.Wait()
 	return nil
 }
 

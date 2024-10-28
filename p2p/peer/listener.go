@@ -52,6 +52,9 @@ func (p *Peer) listener() {
 	p.ConnectionStatus.Store(uint32(ConnectionKilled))
 	close(p.pieces)
 	p.wg.Done()
+	if err := p.conn.Close(); err != nil {
+		p.logger.Error("failed to cose connection", slog.String("err", err.Error()))
+	}
 
 	p.logger.Debug("peer connection shutting down")
 }
