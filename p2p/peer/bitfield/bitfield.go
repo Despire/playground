@@ -3,25 +3,22 @@ package bitfield
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 )
 
 type BitField struct {
-	b       []byte
-	barrier *uint32
-	l       sync.Mutex
+	b         []byte
+	numPieces int64
+	l         sync.Mutex
 }
 
-func NewBitfield(blocks int64, overflow bool) *BitField {
+func NewBitfield(numPieces int64) *BitField {
+	blocks := float64(numPieces) / 8.0
+	blocks = math.Ceil(blocks)
 	return &BitField{
-		b: make([]byte, blocks),
-		barrier: func() *uint32 {
-			if overflow {
-				i := uint32(1)
-				return &i
-			}
-			return nil
-		}(),
+		b:         make([]byte, int64(blocks)),
+		numPieces: numPieces,
 	}
 }
 func (b *BitField) MissingPieces() []uint32 {
@@ -30,12 +27,7 @@ func (b *BitField) MissingPieces() []uint32 {
 	b.l.Lock()
 	defer b.l.Unlock()
 
-	pcs := len(b.b) * 8
-	if b.barrier != nil {
-		pcs -= 7
-	}
-
-	for i := 0; i <= pcs; i++ {
+	for i := int64(0); i < b.numPieces; i++ {
 		o := b.byteOffset(uint32(i))
 		_ = b.b[o] // bounds check
 		piece := b.bitOffset(uint32(i))
@@ -54,12 +46,7 @@ func (b *BitField) ExistingPieces() []uint32 {
 	b.l.Lock()
 	defer b.l.Unlock()
 
-	pcs := len(b.b) * 8
-	if b.barrier != nil {
-		pcs -= 7
-	}
-
-	for i := 0; i <= pcs; i++ {
+	for i := int64(0); i < b.numPieces; i++ {
 		o := b.byteOffset(uint32(i))
 		_ = b.b[o] // bounds check
 		piece := b.bitOffset(uint32(i))
@@ -102,24 +89,19 @@ func (b *BitField) SetWithCheck(idx uint32) error {
 	b.l.Lock()
 	defer b.l.Unlock()
 
+	if int64(idx) >= b.numPieces {
+		return errors.New("trying to set bits that do not belong to the torrent")
+	}
+
 	if field := b.byteOffset(idx); int(field) > len(b.b)-1 {
 		return fmt.Errorf("%v is out of range for bitfield", field)
-	}
-	if b.barrier != nil {
-		last := uint32(len(b.b) - 1)
-		pieceIdx := b.byteOffset(idx)
-		offset := b.bitOffset(idx)
-
-		if pieceIdx == last && offset >= *b.barrier {
-			return errors.New("trying to set bits that do not belong to the torrent")
-		}
 	}
 
 	o := b.byteOffset(idx)
 	_ = b.b[o] // bounds check
 	piece := b.bitOffset(idx)
 	shift := ((1 << 3) - 1) - piece
-	b.b[o] ^= 1 << shift
+	b.b[o] |= 1 << shift
 	return nil
 }
 
@@ -131,7 +113,7 @@ func (b *BitField) Set(idx uint32) {
 	_ = b.b[o] // bounds check
 	piece := b.bitOffset(idx)
 	shift := ((1 << 3) - 1) - piece
-	b.b[o] ^= 1 << shift
+	b.b[o] |= 1 << shift
 }
 
 func (b *BitField) Check(idx uint32) bool {

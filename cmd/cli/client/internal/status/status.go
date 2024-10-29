@@ -48,7 +48,7 @@ type Download struct {
 	// Requests are the number of pieces concurrently
 	// downloaded. No more than len(requests) pieces
 	// are downloaded at a time.
-	requests [14]atomic.Pointer[pendingPiece]
+	requests [10]atomic.Pointer[pendingPiece]
 	// Download Related signaling. The downloadWg
 	// is used when spawning download related goroutines.
 	wg sync.WaitGroup
@@ -95,7 +95,7 @@ func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, d
 		logger:      logger,
 		stop:        make(chan struct{}),
 		Torrent:     t,
-		BitField:    bitfield.NewBitfield(t.NumBlocks()),
+		BitField:    bitfield.NewBitfield(t.NumPieces()),
 		Uploaded:    atomic.Int64{},
 		Downloaded:  atomic.Int64{},
 		DownloadDir: path.Join(downloadDir, hex.EncodeToString(t.Info.Metadata.Hash[:])),

@@ -33,8 +33,7 @@ func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
 			continue
 		}
 
-		blocks, overflow := t.Torrent.NumBlocks()
-		np := peer.New(t.logger, r.PeerID, addr, blocks, overflow)
+		np := peer.New(t.logger, r.PeerID, addr, t.Torrent.NumPieces())
 		t.peers.seeders.Store(addr, np)
 		t.download.wg.Add(1)
 		go t.keepAliveSeeders(np)
@@ -88,7 +87,7 @@ func (t *Tracker) downloadScheduler() {
 
 				// reschedule long running requests.
 				for send := 0; send < len(p.InFlight); send++ {
-					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 30*time.Second {
+					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 15*time.Second {
 						t.peers.seeders.Range(func(_, value any) bool {
 							p := value.(*peer.Peer)
 							canCancel := p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished)
@@ -140,7 +139,7 @@ func (t *Tracker) downloadScheduler() {
 					})
 
 					if len(peers) == 0 {
-						t.logger.Warn("no peers online that contain needed piece",
+						t.logger.Debug("no peers online that contain needed piece",
 							slog.String("piece", fmt.Sprint(piece.Index)),
 							slog.String("url", t.Torrent.Announce),
 							slog.String("infoHash", infoHash),

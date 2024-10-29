@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"path/filepath"
 	"time"
 
@@ -126,19 +125,6 @@ func (m *MetaInfoFile) PieceHash(piece uint32) []byte {
 	return b[piece*20 : piece*20+20]
 }
 
-func (m *MetaInfoFile) NumBlocks() (blocks int64, overflow bool) {
-	switch {
-	case m.InfoSingleFile != nil, m.InfoMultiFile != nil:
-		b := m.BytesToDownload()
-		blocks := float64(b) / float64(m.PieceLength)
-		blocks /= 8
-		blocks = math.Ceil(blocks)
-		return int64(blocks), b%m.PieceLength != 0
-	default:
-		panic("malformed meta_info_file state")
-	}
-}
-
 func From(bencoded io.Reader) (*MetaInfoFile, error) {
 	v, err := bencoding.Decode(bencoded)
 	if err != nil {
@@ -177,6 +163,12 @@ func apply(key string, value bencoding.Value, info *MetaInfoFile) error {
 		info.Metadata.Hash = sha1.Sum([]byte(l.Literal()))
 
 		_, isMultiFile := l.Dict["files"]
+		if isMultiFile {
+			info.InfoMultiFile = new(InfoMultiFile)
+		} else {
+			info.InfoSingleFile = new(InfoSingleFile)
+		}
+
 		for k, v := range l.Dict {
 			if err := infoCommon(k, v, &info.Info, isMultiFile); err != nil {
 				return fmt.Errorf("failed to parse 'info' dictionary: %w", err)
@@ -273,14 +265,8 @@ func infoCommon(key string, value bencoding.Value, info *Info, isMultiFile bool)
 		}
 
 		if isMultiFile {
-			if info.InfoMultiFile == nil {
-				info.InfoMultiFile = &InfoMultiFile{}
-			}
 			info.InfoMultiFile.Name = string(*l)
 		} else {
-			if info.InfoSingleFile == nil {
-				info.InfoSingleFile = &InfoSingleFile{}
-			}
 			info.InfoSingleFile.Name = string(*l)
 		}
 		return nil
@@ -350,6 +336,7 @@ func infoCommon(key string, value bencoding.Value, info *Info, isMultiFile bool)
 				}
 				fi.Path = path
 			}
+			info.InfoMultiFile.Files = append(info.InfoMultiFile.Files, fi)
 		}
 		return nil
 	// common field

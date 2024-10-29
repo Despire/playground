@@ -19,7 +19,7 @@ func TestBitField_Set(t *testing.T) {
 	}{
 		{
 			name: "ok-set-3-in-byte-1",
-			b:    NewBitfield(1, false),
+			b:    NewBitfield(8),
 			args: args{3},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), (b.b[0]>>4)&0x1)
@@ -27,7 +27,7 @@ func TestBitField_Set(t *testing.T) {
 		},
 		{
 			name: "ok-set-0-in-byte-1",
-			b:    NewBitfield(1, false),
+			b:    NewBitfield(8),
 			args: args{0},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), (b.b[0]>>7)&0x1)
@@ -35,7 +35,7 @@ func TestBitField_Set(t *testing.T) {
 		},
 		{
 			name: "ok-set-7-in-byte-1",
-			b:    NewBitfield(1, false),
+			b:    NewBitfield(8),
 			args: args{7},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), b.b[0]&0x1)
@@ -43,7 +43,7 @@ func TestBitField_Set(t *testing.T) {
 		},
 		{
 			name: "ok-set-overflow",
-			b:    NewBitfield(2, true),
+			b:    NewBitfield(9),
 			args: args{8},
 			validate: func(t *testing.T, b *BitField) {
 				assert.Equal(t, uint8(1), (b.b[1]>>7)&0x1)
@@ -71,13 +71,13 @@ func TestBitField_SetWithCheck(t *testing.T) {
 	}{
 		{
 			name:     "err-set-overflow",
-			bitfield: NewBitfield(2, true),
+			bitfield: NewBitfield(9),
 			args:     args{9},
 			wantErr:  func(t assert.TestingT, err error, i ...interface{}) bool { return assert.NotNil(t, err) },
 		},
 		{
 			name:     "ok-set-overflow",
-			bitfield: NewBitfield(2, true),
+			bitfield: NewBitfield(9),
 			args:     args{8},
 			wantErr:  func(t assert.TestingT, err error, i ...interface{}) bool { return assert.Nil(t, err) },
 		},
@@ -98,17 +98,17 @@ func TestBitField_MissingPieces(t *testing.T) {
 	}{
 		{
 			name: "ok-overflow",
-			b:    NewBitfield(1, true),
+			b:    NewBitfield(1),
 			want: []uint32{0},
 		},
 		{
 			name: "ok-not-overflow",
-			b:    NewBitfield(1, false),
+			b:    NewBitfield(8),
 			want: []uint32{0, 1, 2, 3, 4, 5, 6, 7},
 		},
 		{
 			name: "ok-overflow-2",
-			b:    NewBitfield(2, true),
+			b:    NewBitfield(9),
 			want: []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8},
 		},
 	}
@@ -143,7 +143,7 @@ func Test_ExistingPieces(t *testing.T) {
 		172,
 	}
 
-	b := NewBitfield(264, true)
+	b := NewBitfield(2105)
 	for _, p := range pieces {
 		b.Set(p)
 	}

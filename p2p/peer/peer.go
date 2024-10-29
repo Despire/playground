@@ -85,7 +85,7 @@ type Peer struct {
 	Bitfield *bitfield.BitField
 }
 
-func New(logger *slog.Logger, id, addr string, blocks int64, overflow bool) *Peer {
+func New(logger *slog.Logger, id, addr string, numPieces int64) *Peer {
 	if id != "" {
 		logger = logger.With(slog.String("peer_id", id))
 	}
@@ -96,7 +96,7 @@ func New(logger *slog.Logger, id, addr string, blocks int64, overflow bool) *Pee
 		Addr:     addr,
 		conn:     nil,
 		wg:       sync.WaitGroup{},
-		Bitfield: bitfield.NewBitfield(blocks, overflow),
+		Bitfield: bitfield.NewBitfield(numPieces),
 		pieces:   make(chan *messagesv1.Piece),
 	}
 

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
@@ -115,10 +115,6 @@ func (p *Client) WaitFor(id string) <-chan error {
 					}
 
 					pcs := tr.BitField.ExistingPieces()
-					slices.Sort(pcs)
-
-					q := tr.Torrent.NumPieces()
-					_ = q
 
 					copied := int64(0)
 					var errAll error
@@ -129,6 +125,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 							errAll = errors.Join(errAll, fmt.Errorf("failed to open file for piece %v", i))
 							continue
 						}
+						defer f.Close()
 
 						w, err := io.Copy(final, f)
 						if err != nil {
@@ -139,7 +136,11 @@ func (p *Client) WaitFor(id string) <-chan error {
 						copied += w
 					}
 
-					if copied != tr.Torrent.InfoSingleFile.Length {
+					if err := final.Close(); err != nil {
+						errAll = errors.Join(errAll, err)
+					}
+
+					if copied != tr.Torrent.BytesToDownload() {
 						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", copied, tr.Torrent.InfoSingleFile.Length))
 					}
 
@@ -147,8 +148,105 @@ func (p *Client) WaitFor(id string) <-chan error {
 						r <- fmt.Errorf("failed to reconstruct downloaded torrent: %w", errAll)
 					}
 				case tr.Torrent.InfoMultiFile != nil:
-					// TODO: implement.
-					r <- fmt.Errorf("multi file assembly not yet implemented")
+					parent := filepath.Join(tr.DownloadDir, tr.Torrent.InfoMultiFile.Name)
+					// create parent dir.
+					if _, err := os.Stat(parent); errors.Is(err, os.ErrNotExist) {
+						if err := os.Mkdir(parent, os.ModePerm); err != nil {
+							r <- fmt.Errorf("failed to create parent directory for assembling multi file torrent")
+							break
+						}
+					}
+
+					// create torrent dir structure.
+					var errAll error
+					var files []io.WriteCloser
+					for _, fi := range tr.Torrent.InfoMultiFile.Files {
+						dir, filename := filepath.Split(fi.Path)
+						if dir != "" {
+							if err := os.MkdirAll(filepath.Join(parent, dir), os.ModePerm); err != nil {
+								errAll = errors.Join(errAll, fmt.Errorf("failed to create parent dir for path %s: %w", fi.Path, err))
+								continue
+							}
+						}
+
+						file, err := os.Create(filepath.Join(parent, dir, filename))
+						if err != nil {
+							errAll = errors.Join(errAll, fmt.Errorf("failed to create torrent file for merging pieces: %w", err))
+							continue
+						}
+
+						files = append(files, file)
+					}
+
+					if errAll != nil {
+						r <- fmt.Errorf("failed to reconstruct multi-file torrent: %w", errAll)
+						break
+					}
+
+					// prepare handles to pieces.
+					pcs := tr.BitField.ExistingPieces()
+					pieces := make([]io.ReadCloser, 0, len(pcs))
+
+					for _, i := range pcs {
+						path := filepath.Join(tr.DownloadDir, fmt.Sprintf("%v.bin", i))
+						f, err := os.Open(path)
+						if err != nil {
+							errAll = errors.Join(errAll, fmt.Errorf("failed to open file for piece %v", i))
+							continue
+						}
+						pieces = append(pieces, f)
+
+					}
+
+					if errAll != nil {
+						r <- fmt.Errorf("failed to reconstruct multi-file torrent: %w", errAll)
+						break
+					}
+
+					// TODO: correcly decode multifile torrents.
+					totalCopied := int64(0)
+					for i, fi := range tr.Torrent.InfoMultiFile.Files[:1] {
+						start := totalCopied / tr.Torrent.PieceLength
+						end := start + int64(math.Ceil(float64(fi.Length)/float64(tr.Torrent.PieceLength)))
+
+						copied := int64(0)
+						for start < end {
+							w, err := io.CopyN(files[i], pieces[start], min(fi.Length, tr.Torrent.PieceLength))
+							if err != nil {
+								errAll = errors.Join(errAll, fmt.Errorf("failed to copy piece %v to final merging file %s: %w", i, fi.Path, err))
+								continue
+							}
+							copied += w
+							start++
+						}
+
+						if copied != fi.Length {
+							errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct file from downloaded pieces %d out of %d reconstructed", totalCopied, tr.Torrent.InfoSingleFile.Length))
+							break
+						}
+
+						totalCopied += copied
+					}
+
+					for _, p := range pieces {
+						if err := p.Close(); err != nil {
+							errAll = errors.Join(errAll, err)
+						}
+					}
+
+					for _, f := range files {
+						if err := f.Close(); err != nil {
+							errAll = errors.Join(errAll, err)
+						}
+					}
+
+					if totalCopied != tr.Torrent.BytesToDownload() {
+						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", totalCopied, tr.Torrent.BytesToDownload()))
+					}
+
+					if errAll != nil {
+						r <- fmt.Errorf("failed to reconstruct multi-file torrent: %w", errAll)
+					}
 				}
 				return
 			}
