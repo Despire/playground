@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -141,7 +140,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 					}
 
 					if copied != tr.Torrent.BytesToDownload() {
-						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", copied, tr.Torrent.InfoSingleFile.Length))
+						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", copied, tr.Torrent.BytesToDownload()))
 					}
 
 					if errAll != nil {
@@ -203,29 +202,22 @@ func (p *Client) WaitFor(id string) <-chan error {
 						break
 					}
 
-					// TODO: correcly decode multifile torrents.
-					totalCopied := int64(0)
-					for i, fi := range tr.Torrent.InfoMultiFile.Files[:1] {
-						start := totalCopied / tr.Torrent.PieceLength
-						end := start + int64(math.Ceil(float64(fi.Length)/float64(tr.Torrent.PieceLength)))
-
-						copied := int64(0)
-						for start < end {
-							w, err := io.CopyN(files[i], pieces[start], min(fi.Length, tr.Torrent.PieceLength))
+					tc, cp, l := int64(0), 0, tr.Torrent.PieceLength
+					for i, fi := range tr.Torrent.InfoMultiFile.Files {
+						for c := int64(0); c < fi.Length; {
+							w, err := io.CopyN(files[i], pieces[cp], min(l, fi.Length-c))
 							if err != nil {
 								errAll = errors.Join(errAll, fmt.Errorf("failed to copy piece %v to final merging file %s: %w", i, fi.Path, err))
 								continue
 							}
-							copied += w
-							start++
+							l -= w
+							if l == 0 {
+								cp++ // move to next piece.
+								l = tr.Torrent.PieceLength
+							}
+							c += w
 						}
-
-						if copied != fi.Length {
-							errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct file from downloaded pieces %d out of %d reconstructed", totalCopied, tr.Torrent.InfoSingleFile.Length))
-							break
-						}
-
-						totalCopied += copied
+						tc += fi.Length
 					}
 
 					for _, p := range pieces {
@@ -240,8 +232,8 @@ func (p *Client) WaitFor(id string) <-chan error {
 						}
 					}
 
-					if totalCopied != tr.Torrent.BytesToDownload() {
-						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", totalCopied, tr.Torrent.BytesToDownload()))
+					if tc != tr.Torrent.BytesToDownload() {
+						errAll = errors.Join(errAll, fmt.Errorf("failed to reconstruct torrent from downloaded pieces %d out of %d reconstructed", tc, tr.Torrent.BytesToDownload()))
 					}
 
 					if errAll != nil {
