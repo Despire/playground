@@ -173,6 +173,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 							errAll = errors.Join(errAll, fmt.Errorf("failed to create torrent file for merging pieces: %w", err))
 							continue
 						}
+						defer file.Close()
 
 						files = append(files, file)
 					}
@@ -193,6 +194,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 							errAll = errors.Join(errAll, fmt.Errorf("failed to open file for piece %v", i))
 							continue
 						}
+						defer f.Close()
 						pieces = append(pieces, f)
 
 					}
@@ -218,18 +220,6 @@ func (p *Client) WaitFor(id string) <-chan error {
 							c += w
 						}
 						tc += fi.Length
-					}
-
-					for _, p := range pieces {
-						if err := p.Close(); err != nil {
-							errAll = errors.Join(errAll, err)
-						}
-					}
-
-					for _, f := range files {
-						if err := f.Close(); err != nil {
-							errAll = errors.Join(errAll, err)
-						}
 					}
 
 					if tc != tr.Torrent.BytesToDownload() {
