@@ -43,6 +43,17 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 	if len(args) < 1 {
 		return errors.New("no torrent file specified")
 	}
+	action := "leech"
+	if len(args) == 2 {
+		switch args[1] {
+		case "leech":
+		case "both":
+			action = "both"
+		default:
+			return fmt.Errorf("unsupported torrent action %v, supported only (leech|seed|both)")
+		}
+	}
+
 	file, err := os.OpenFile(args[0], os.O_RDONLY, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open torrent file %q: %w", args[0], err)
@@ -54,7 +65,7 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		return fmt.Errorf("failed to read torrent file %q: %w", args[0], err)
 	}
 
-	c, err := client.New(client.WithLogger(logger))
+	c, err := client.New(client.WithLogger(logger), client.WithAction(client.Action(action)))
 	if err != nil {
 		return fmt.Errorf("failed to initialize the client: %w", err)
 	}
@@ -68,25 +79,21 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 	}
 
 	done := c.WaitFor(id)
-	select {
-	case <-ctx.Done():
-		logger.Warn("interrupt signal received")
-		if err := c.Close(); err != nil {
-			logger.Error("failed to close client", "error", err)
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Warn("interrupt signal received")
+			return c.Close()
+		case err, ok := <-done:
+			if err != nil {
+				if err := c.Close(); err != nil {
+					logger.Error("failed to close client", "error", err)
+				}
+				return fmt.Errorf("failed to wait for work on torrent %s to finish: %w", id, err)
+			}
+			if ok {
+				logger.Info("successfully downloaded torrent", slog.String("id", id))
+			}
 		}
-		logger.Info("waiting for torrent to finish", slog.String("torrent", id))
-		if err := <-done; err != nil {
-			return fmt.Errorf("failed to wait for work on torrent %s to finish: %w", id, err)
-		}
-		return nil
-	case err := <-done:
-		if err := c.Close(); err != nil {
-			logger.Error("failed to close client", "error", err)
-		}
-		if err != nil {
-			return fmt.Errorf("failed to wait for work on torrent %s to finish: %w", id, err)
-		}
-		logger.Info("successfully downloaded torrent", slog.String("id", id))
-		return nil
 	}
 }

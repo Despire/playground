@@ -20,11 +20,15 @@ func (t *Tracker) CancelDownload()                      { close(t.download.cance
 func (t *Tracker) WaitUntilDownloaded() <-chan struct{} { return t.download.completed }
 
 func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
+	if t.Downloaded.Load() == t.Torrent.BytesToDownload() {
+		return nil
+	}
+
 	var errAll error
 
 	for _, r := range resp.Peers {
 		addr := net.JoinHostPort(r.IP, fmt.Sprint(r.Port))
-		t.logger.Info("initiating connection to",
+		t.logger.Debug("initiating connection to",
 			slog.String("peer_addr", addr),
 			slog.String("url", t.Torrent.Announce),
 			slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
@@ -33,7 +37,7 @@ func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
 			continue
 		}
 
-		np := peer.New(t.logger, r.PeerID, addr, t.Torrent.NumPieces())
+		np := peer.NewSeeder(t.logger, r.PeerID, addr, t.Torrent.NumPieces())
 		t.peers.seeders.Store(addr, np)
 		t.download.wg.Add(1)
 		go t.keepAliveSeeders(np)
@@ -119,7 +123,7 @@ func (t *Tracker) downloadScheduler() {
 						p.InFlight[send] = nil
 					}
 				}
-				p.InFlight = slices.DeleteFunc(p.InFlight, func(r *timedRequest) bool { return r == nil })
+				p.InFlight = slices.DeleteFunc(p.InFlight, func(r *timedDownloadRequest) bool { return r == nil })
 
 				// schedule pending requests to peers.
 				for send := 0; send < len(p.Pending); send++ {
@@ -168,7 +172,7 @@ func (t *Tracker) downloadScheduler() {
 					}
 
 					p.Pending[send] = nil
-					p.InFlight = append(p.InFlight, &timedRequest{
+					p.InFlight = append(p.InFlight, &timedDownloadRequest{
 						request: *piece,
 						send:    time.Now(),
 					})
@@ -245,7 +249,7 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 	pid := p.Id
 	for {
 		select {
-		case recv, ok := <-p.Pieces():
+		case recv, ok := <-p.SeederPieces():
 			if !ok {
 				t.logger.Debug("shutting piece downloader, channel closed",
 					slog.String("peer", pid),
@@ -277,7 +281,7 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 
 			piece.l.Lock()
 
-			req := slices.IndexFunc(piece.InFlight, func(r *timedRequest) bool {
+			req := slices.IndexFunc(piece.InFlight, func(r *timedDownloadRequest) bool {
 				return r.request == messagesv1.Request{
 					Index:  recv.Index,
 					Begin:  recv.Begin,
@@ -343,6 +347,8 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 				}
 				digest := sha1.Sum(data)
 
+				// TODO: randomly choose to invalidate hashes to test stability of the implementation.
+				// it should eventually still manage to download.
 				if !bytes.Equal(digest[:], t.Torrent.PieceHash(recv.Index)) {
 					t.logger.Debug("invalid piece sha1 hash, stop tracking",
 						slog.String("peer", pid),
@@ -456,7 +462,15 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 	for {
 		select {
 		case <-t.stop:
-			t.logger.Info("shutting down peer refresher, stopped tracker",
+			if err := p.SendNotInterested(); err != nil {
+				t.logger.Error("failed to send not-interested msg, after successful download",
+					slog.String("peer_ip", p.Addr),
+					slog.String("peer_addr", p.Id),
+					slog.String("url", t.Torrent.Announce),
+					slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
+				)
+			}
+			t.logger.Debug("shutting down peer refresher, stopped tracker",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
 				slog.String("peer", p.Id),
@@ -473,7 +487,7 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 			t.download.wg.Done()
 			return
 		case <-t.download.cancel:
-			t.logger.Info("shutting down peer refresher, canceled download",
+			t.logger.Debug("shutting down peer refresher, canceled download",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
 				slog.String("peer", p.Id),
@@ -490,6 +504,14 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 			t.download.wg.Done()
 			return
 		case <-t.download.completed:
+			if err := p.SendNotInterested(); err != nil {
+				t.logger.Error("failed to send not-interested msg, after successful download",
+					slog.String("peer_ip", p.Addr),
+					slog.String("peer_addr", p.Id),
+					slog.String("url", t.Torrent.Announce),
+					slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
+				)
+			}
 			t.logger.Debug("shutting down peer refresher, as torrent was downloaded",
 				slog.String("url", t.Torrent.Announce),
 				slog.String("infoHash", infoHash),
@@ -510,13 +532,13 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 			refresh.Reset(2 * time.Minute)
 			switch s := peer.ConnectionStatus(p.ConnectionStatus.Load()); s {
 			case peer.ConnectionPending, peer.ConnectionKilled:
-				t.logger.Info("attempting to connect with peer",
+				t.logger.Debug("attempting to connect with peer",
 					slog.String("peer_ip", p.Addr),
 					slog.String("peer_addr", p.Id),
 					slog.String("url", t.Torrent.Announce),
 					slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
 				)
-				if err := p.Connect(); err != nil {
+				if err := p.ConnectSeeder(); err != nil {
 					t.logger.Error("failed to reconnect with peer",
 						slog.String("peer_ip", p.Addr),
 						slog.String("peer_addr", p.Id),
@@ -526,7 +548,7 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 					)
 					continue
 				}
-				t.logger.Info("initiating handshake",
+				t.logger.Debug("initiating handshake",
 					slog.String("peer_ip", p.Addr),
 					slog.String("peer_addr", p.Id),
 					slog.String("url", t.Torrent.Announce),
@@ -571,9 +593,11 @@ func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
 				t.download.wg.Add(1)
 				go t.recvPieces(p)
 			case peer.ConnectionEstablished:
-				t.logger.Info("sending keep alive event on torrent peers",
+				t.logger.Info("sending keep alive event on torrent peer",
 					slog.String("url", t.Torrent.Announce),
 					slog.String("infoHash", infoHash),
+					slog.String("peer_ip", p.Addr),
+					slog.String("peer", p.Id),
 				)
 				if err := p.SendKeepAlive(); err != nil {
 					t.logger.Error("failed to keep alive",

@@ -63,7 +63,7 @@ func (h *Handshake) Deserialize(data []byte) error {
 
 	h.PeerID = string(data[ps:pe])
 
-	return nil
+	return h.Validate()
 }
 
 func (h *Handshake) Validate() error {

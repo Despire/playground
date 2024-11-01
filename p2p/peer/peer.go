@@ -60,6 +60,13 @@ const (
 	ConnectionKilled
 )
 
+type peerType byte
+
+const (
+	leecher peerType = iota
+	seeder
+)
+
 // Peer represents a peer in the swarm for sharing a file.
 type Peer struct {
 	logger *slog.Logger
@@ -69,6 +76,7 @@ type Peer struct {
 	wg               sync.WaitGroup
 	conn             net.Conn
 	ConnectionStatus atomic.Uint32
+	typ              peerType
 
 	Status struct {
 		Remote atomic.Uint32
@@ -80,12 +88,19 @@ type Peer struct {
 		This   atomic.Uint32
 	}
 
-	pieces chan *messagesv1.Piece
+	seeder struct {
+		pieces chan *messagesv1.Piece
+	}
+
+	leecher struct {
+		requests chan *messagesv1.Request
+		cancels  chan *messagesv1.Cancel
+	}
 
 	Bitfield *bitfield.BitField
 }
 
-func New(logger *slog.Logger, id, addr string, numPieces int64) *Peer {
+func NewSeeder(logger *slog.Logger, id, addr string, numPieces int64) *Peer {
 	if id != "" {
 		logger = logger.With(slog.String("peer_id", id))
 	}
@@ -97,13 +112,47 @@ func New(logger *slog.Logger, id, addr string, numPieces int64) *Peer {
 		conn:     nil,
 		wg:       sync.WaitGroup{},
 		Bitfield: bitfield.NewBitfield(numPieces),
-		pieces:   make(chan *messagesv1.Piece),
+		typ:      seeder,
 	}
+
+	p.seeder.pieces = make(chan *messagesv1.Piece)
 
 	return p
 }
 
-func (p *Peer) Pieces() <-chan *messagesv1.Piece { return p.pieces }
+func NewLeecher(logger *slog.Logger, id, addr string, numPieces int64, conn net.Conn) *Peer {
+	p := &Peer{
+		logger:   logger.With(slog.String("peer_id", id)),
+		Id:       id,
+		Addr:     addr,
+		conn:     conn,
+		wg:       sync.WaitGroup{},
+		Bitfield: bitfield.NewBitfield(numPieces),
+		typ:      leecher,
+	}
+
+	p.ConnectionStatus.Store(uint32(ConnectionEstablished))
+
+	p.Status.Remote.Store(uint32(Choked))
+	p.Status.This.Store(uint32(Choked))
+
+	p.Interest.Remote.Store(uint32(NotInterested))
+	p.Interest.This.Store(uint32(NotInterested))
+
+	p.leecher.requests = make(chan *messagesv1.Request)
+	p.leecher.cancels = make(chan *messagesv1.Cancel)
+
+	p.wg.Add(1)
+	go p.listener()
+
+	return p
+}
+
+func (p *Peer) SeederPieces() <-chan *messagesv1.Piece { return p.seeder.pieces }
+
+func (p *Peer) LeecherRequests() (<-chan *messagesv1.Request, <-chan *messagesv1.Cancel) {
+	return p.leecher.requests, p.leecher.cancels
+}
 
 func (p *Peer) Close() error {
 	if p.ConnectionStatus.Load() != uint32(ConnectionKilled) {
@@ -118,7 +167,7 @@ func (p *Peer) Close() error {
 	return nil
 }
 
-func (p *Peer) Connect() error {
+func (p *Peer) ConnectSeeder() error {
 	if p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
 		return errors.New("cannot connect on an already healthy connection")
 	}
@@ -137,7 +186,7 @@ func (p *Peer) Connect() error {
 	p.Interest.Remote.Store(uint32(NotInterested))
 	p.Interest.This.Store(uint32(NotInterested))
 
-	p.pieces = make(chan *messagesv1.Piece)
+	p.seeder.pieces = make(chan *messagesv1.Piece)
 
 	return nil
 }
@@ -183,10 +232,6 @@ func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
 		return fmt.Errorf("failed to deserialize v1 handshake message: %w", err)
 	}
 
-	if err := h.Validate(); err != nil {
-		return fmt.Errorf("failed to validate v1 handshake message: %w", err)
-	}
-
 	// adjust peer information.
 	p.Id = h.PeerID
 	p.logger = p.logger.With(slog.String("peer_id", p.Id))
@@ -194,6 +239,32 @@ func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
 
 	p.wg.Add(1)
 	go p.listener()
+
+	return nil
+}
+
+func (p *Peer) SendHandshakeV1(infoHash, peerID string) error {
+	if p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
+		return nil
+	}
+
+	h := messagesv1.Handshake{
+		Pstr:     messagesv1.ProtocolV1,
+		Reserved: [8]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+		InfoHash: infoHash,
+		PeerID:   peerID,
+	}
+
+	msg := h.Serialize()
+
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write v1 handshake message: %w", err)
+	}
+
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of the v1 handshake message")
+	}
 
 	return nil
 }
@@ -372,6 +443,25 @@ func (p *Peer) SendHave(have *messagesv1.Have) error {
 	}
 
 	msg := have.Serialize()
+	w, err := io.Copy(p.conn, bytes.NewReader(msg))
+	if err != nil {
+		return fmt.Errorf("failed to write have message: %w", err)
+	}
+	if int(w) != len(msg) {
+		return fmt.Errorf("failed to write all of have message")
+	}
+	return nil
+}
+
+func (p *Peer) SendPiece(piece *messagesv1.Piece) error {
+	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+		return fmt.Errorf("invalid connection status %s, needed %s",
+			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionEstablished,
+		)
+	}
+
+	msg := piece.Serialize()
 	w, err := io.Copy(p.conn, bytes.NewReader(msg))
 	if err != nil {
 		return fmt.Errorf("failed to write have message: %w", err)

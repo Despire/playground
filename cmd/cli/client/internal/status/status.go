@@ -18,10 +18,16 @@ import (
 	"github.com/Despire/tinytorrent/torrent"
 )
 
-type timedRequest struct {
+type timedDownloadRequest struct {
 	request  messagesv1.Request
 	send     time.Time
 	received bool
+}
+
+type timedUploadRequest struct {
+	request  messagesv1.Request
+	recieved time.Time
+	addr     string
 }
 
 type pendingPiece struct {
@@ -34,11 +40,12 @@ type pendingPiece struct {
 	Size       int64
 	Received   []*messagesv1.Piece
 	Pending    []*messagesv1.Request
-	InFlight   []*timedRequest
+	InFlight   []*timedDownloadRequest
 }
 
 type peers struct {
-	seeders sync.Map
+	seeders  sync.Map
+	leechers sync.Map
 }
 
 // How often the rate of bytes downloaded is updated.
@@ -49,8 +56,7 @@ type Download struct {
 	// downloaded. No more than len(requests) pieces
 	// are downloaded at a time.
 	requests [10]atomic.Pointer[pendingPiece]
-	// Download Related signaling. The downloadWg
-	// is used when spawning download related goroutines.
+	// The wait group is used when spawning download related goroutines.
 	wg sync.WaitGroup
 	// Download related signaling. When the torrent
 	// finishes downloading the downloaded channel is
@@ -59,8 +65,21 @@ type Download struct {
 	// the downloads and keep other workflows
 	// running, such as seeding.
 	cancel, completed chan struct{}
-	// Rate is the number of bytes downloaded for the
-	// last 10 seconds.
+	// Rate is the number of bytes downloaded for the last 1 seconds.
+	rate atomic.Int64
+}
+
+type Upload struct {
+	// Requests are the number of maximum requests
+	// that will be handled by the client for any
+	// number of connected leechers.
+	requests [100]atomic.Pointer[timedUploadRequest]
+	// The wait group is used when spawning upload related goroutines.
+	wg sync.WaitGroup
+	// Upload related signaling. When the torrent
+	// finishes uploading the cancel channel is closed.
+	cancel chan struct{}
+	// Rate is the number of bytes uploaded for the last 1 second.
 	rate atomic.Int64
 }
 
@@ -77,7 +96,10 @@ type Tracker struct {
 	// download wraps all download related information.
 	download Download
 
-	// Stop channel indicates the the application was shutdown
+	// upload wraps all upload related information.
+	upload Upload
+
+	// Stop channel indicates the application was shutdown
 	// By closing this channel all workflows will finish
 	// and the tracker will no longer do any work.
 	stop chan struct{}
@@ -126,6 +148,9 @@ func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, d
 
 	tr.download.wg.Add(1)
 	go tr.downloadScheduler()
+
+	tr.upload.wg.Add(1)
+	go tr.processUploadRequests()
 	return &tr, nil
 }
 
@@ -145,6 +170,7 @@ func (t *Tracker) Close() error {
 	}
 	close(t.stop)
 	t.download.wg.Wait()
+	t.upload.wg.Wait()
 	return nil
 }
 
@@ -155,11 +181,33 @@ func (t *Tracker) Flush(idx uint32, pieceBytes []byte) error {
 		}
 	}
 
-	f, err := os.Create(path.Join(t.DownloadDir, fmt.Sprintf("%v.bin", idx)))
+	f, err := os.Create(filepath.Join(t.DownloadDir, fmt.Sprintf("%v.bin", idx)))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
 	return binary.Write(f, binary.LittleEndian, pieceBytes)
+}
+
+// TODO: add tests.
+func (t *Tracker) ReadRequest(req *messagesv1.Request) ([]byte, error) {
+	if _, err := os.Stat(t.DownloadDir); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("cannot construct request: %w", err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(t.DownloadDir, fmt.Sprintf("%v.bin", req.Index)))
+	if err != nil {
+		return nil, err
+	}
+
+	if int(req.Begin) >= len(b) {
+		return nil, fmt.Errorf("invalid request, offset within piece larger than piece size")
+	}
+
+	if l := len(b) - int(req.Begin); int(req.Length) > l {
+		return nil, fmt.Errorf("invalid request, offset + length tries to request larger block than possible")
+	}
+
+	return b[int(req.Begin):(int(req.Begin + req.Length))], nil
 }

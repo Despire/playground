@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,6 +34,13 @@ func init() {
 	}
 }
 
+type Action string
+
+const (
+	Leech = "leech"
+	Both  = "both"
+)
+
 // Client represents a single instance of a peer within
 // the BitTorrent network.
 type Client struct {
@@ -45,6 +53,8 @@ type Client struct {
 	done    chan struct{}
 
 	torrentsDownloading sync.Map
+	action              Action
+	seedServer          net.Listener
 
 	wg sync.WaitGroup
 }
@@ -60,13 +70,29 @@ func New(opts ...Option) (*Client, error) {
 		o(p)
 	}
 
+	if p.action != Leech {
+		var err error
+		if p.seedServer, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", p.port)); err != nil {
+			return nil, fmt.Errorf("failed to announce listener server to the network: %w", err)
+		}
+		p.wg.Add(1)
+		go p.acceptLeechers()
+	}
+
 	p.wg.Add(1)
 	go p.watch()
 
 	return p, nil
 }
 
-func (p *Client) Close() error { close(p.done); p.wg.Wait(); return nil }
+func (p *Client) Close() error {
+	if p.seedServer != nil {
+		p.seedServer.Close()
+	}
+	close(p.done)
+	p.wg.Wait()
+	return nil
+}
 
 func (p *Client) WorkOn(t *torrent.MetaInfoFile) (string, error) {
 	h := string(t.Metadata.Hash[:])
@@ -237,6 +263,22 @@ func (p *Client) WaitFor(id string) <-chan error {
 	return r
 }
 
+func (p *Client) acceptLeechers() {
+	defer p.wg.Done()
+	for {
+		conn, err := p.seedServer.Accept()
+		if err != nil {
+			p.logger.Error("failed to accept new incoming connections", slog.String("err", err.Error()))
+			if errors.Is(err, net.ErrClosed) {
+				break
+			}
+		}
+
+		p.wg.Add(1)
+		go p.handlePeer(conn)
+	}
+}
+
 func (p *Client) watch() {
 	defer p.wg.Done()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -270,6 +312,7 @@ func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status
 
 	var start *tracker.Response
 
+	// TODO: adjust this to become a seeder aswell.
 tracker:
 	for {
 		select {

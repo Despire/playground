@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"os"
 
 	"github.com/Despire/tinytorrent/cmd/cli/client/internal/build"
@@ -25,6 +24,12 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+func WithAction(action Action) Option {
+	return func(client *Client) {
+		client.action = action
+	}
+}
+
 func defaults(c *Client) {
 	info := build.Information()
 
@@ -36,7 +41,9 @@ func defaults(c *Client) {
 		Level:     slog.LevelDebug,
 	}))
 
-	c.port = 6881 + rand.IntN(9)
+	c.port = 6882 // default port this client will listen on.
+
+	c.action = Leech
 
 	c.logger.Debug("Build Information",
 		slog.String("ClientID", info.ClientID),

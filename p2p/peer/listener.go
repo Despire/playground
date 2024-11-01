@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"time"
 
@@ -18,7 +19,7 @@ const KeepAliveTimeout = 3 * time.Minute
 func (p *Peer) listener() {
 	for p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
 		if err := p.conn.SetReadDeadline(time.Now().Add(KeepAliveTimeout)); err != nil {
-			p.logger.Error("failed to set read deadline to KeepAliveTimeout",
+			p.logger.Debug("failed to set read deadline to KeepAliveTimeout",
 				slog.String("err", err.Error()),
 			)
 			continue
@@ -27,16 +28,14 @@ func (p *Peer) listener() {
 		msg, err := messagesv1.Identify(p.conn)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				p.logger.Error("peer read exceeded KeepAliveTimeout Closing connection.")
+				p.logger.Debug("peer read exceeded KeepAliveTimeout Closing connection.")
 				break
 			}
-			if errors.Is(err, io.EOF) {
-				p.logger.Error("peer read EOF reading from connection.")
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				p.logger.Debug("closed connection, peer read EOF reading from connection.")
 				break
 			}
-			p.logger.Error("failed to read from connection",
-				slog.String("err", err.Error()),
-			)
+			p.logger.Error("failed to read from connection", slog.String("err", err.Error()))
 			continue
 		}
 
@@ -49,18 +48,27 @@ func (p *Peer) listener() {
 		}
 	}
 
-	p.ConnectionStatus.Store(uint32(ConnectionKilled))
-	close(p.pieces)
-	p.wg.Done()
-	if err := p.conn.Close(); err != nil {
-		p.logger.Error("failed to cose connection", slog.String("err", err.Error()))
+	switch p.typ {
+	case leecher:
+		close(p.leecher.requests)
+		close(p.leecher.cancels)
+	case seeder:
+		close(p.seeder.pieces)
 	}
+
+	if p.conn != nil {
+		if err := p.conn.Close(); err != nil {
+			p.logger.Debug("failed to close connection", slog.String("err", err.Error()))
+		}
+	}
+
+	p.ConnectionStatus.Store(uint32(ConnectionKilled))
+	p.wg.Done()
 
 	p.logger.Debug("peer connection shutting down")
 }
 
 func (p *Peer) process(msg *messagesv1.Message) error {
-	// TODO: determine when to close connection.
 	switch msg.Type {
 	case messagesv1.KeepAliveType:
 		// do nothing.
@@ -100,19 +108,42 @@ func (p *Peer) process(msg *messagesv1.Message) error {
 		p.logger.Debug("updated bitfield based on bitfield message")
 		return nil
 	case messagesv1.PieceType: // peer send a piece
-		pc := new(messagesv1.Piece)
+		if p.typ == seeder {
+			pc := new(messagesv1.Piece)
 
-		if err := pc.Deserialize(msg.Payload); err != nil {
-			return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			if err := pc.Deserialize(msg.Payload); err != nil {
+				return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			}
+			p.seeder.pieces <- pc
+			return nil
 		}
-		p.pieces <- pc
-		return nil
+		return fmt.Errorf("received piece message on leecher connection")
 	case messagesv1.PortType: // peer requested DHT extension.
 		return fmt.Errorf("dht is not supported")
-	case messagesv1.RequestType:
-		return fmt.Errorf("did not expect a request message on a leech connection")
+	case messagesv1.RequestType: //  peer send a request
+		if p.typ == leecher {
+			req := new(messagesv1.Request)
+
+			if err := req.Deserialize(msg.Payload); err != nil {
+				return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			}
+
+			p.leecher.requests <- req
+			return nil
+		}
+		return fmt.Errorf("did not expect a request message on a seeder connection")
 	case messagesv1.CancelType:
-		return fmt.Errorf("did not expect a cancel message on a leech connection")
+		if p.typ == leecher {
+			cnc := new(messagesv1.Cancel)
+
+			if err := cnc.Deserialize(msg.Payload); err != nil {
+				return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			}
+
+			p.leecher.cancels <- cnc
+			return nil
+		}
+		return fmt.Errorf("did not expect a cancel message on a seeder connection")
 	default:
 		return fmt.Errorf("no implementation for processing message type: %s", msg.Type)
 	}
