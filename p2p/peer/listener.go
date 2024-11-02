@@ -17,16 +17,19 @@ import (
 const KeepAliveTimeout = 3 * time.Minute
 
 func (p *Peer) listener() {
-	for p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
+	for {
 		if err := p.conn.SetReadDeadline(time.Now().Add(KeepAliveTimeout)); err != nil {
-			p.logger.Debug("failed to set read deadline to KeepAliveTimeout", slog.Any("err", err))
-			continue
+			p.logger.Info("failed to set read deadline to KeepAliveTimeout", slog.Any("err", err))
+			break
 		}
 
 		msg, err := messagesv1.Identify(p.conn)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				p.logger.Debug("peer read exceeded KeepAliveTimeout Closing connection.")
+				p.logger.Debug("peer read exceeded KeepAliveTimeout closing connection.")
+				if err := p.conn.Close(); err != nil {
+					p.logger.Debug("failed to close connection", slog.Any("err", err))
+				}
 				break
 			}
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
@@ -50,16 +53,8 @@ func (p *Peer) listener() {
 	case seeder:
 		close(p.seeder.pieces)
 	}
-
-	if p.conn != nil {
-		if err := p.conn.Close(); err != nil {
-			p.logger.Debug("failed to close connection", slog.Any("err", err))
-		}
-	}
-
-	p.ConnectionStatus.Store(uint32(ConnectionKilled))
 	p.wg.Done()
-
+	p.connectionStatus.Store(uint32(ConnectionKilled))
 	p.logger.Debug("peer connection shutting down")
 }
 

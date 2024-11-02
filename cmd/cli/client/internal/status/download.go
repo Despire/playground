@@ -33,16 +33,15 @@ func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
 			continue
 		}
 
-		np := peer.NewSeeder(t.logger, r.PeerID, addr, t.Torrent.NumPieces())
-		t.peers.seeders.Store(addr, np)
 		t.download.wg.Add(1)
-		go t.keepAliveSeeders(np)
+		go t.keepAliveSeeders(addr)
 	}
 
 	return errAll
 }
 
 func (t *Tracker) downloadScheduler() {
+	defer t.download.wg.Done()
 	// pool in random order
 	// TODO: change to rarest piece.
 	unverified := t.BitField.MissingPieces()
@@ -56,15 +55,13 @@ func (t *Tracker) downloadScheduler() {
 		select {
 		case <-t.stop:
 			t.logger.Info("shutting down piece downloader, closed tracker")
-			t.download.wg.Done()
 			return
 		case <-t.download.cancel:
 			t.logger.Info("shutting down piece downloader, canceled download")
-			t.download.wg.Done()
 			return
 		case <-rateTicker.C:
 			newRate := t.Downloaded.Load()
-			diff := newRate - currentRate
+			diff := max(0, newRate-currentRate)
 			t.download.rate.Store(diff)
 			currentRate = newRate
 		default:
@@ -83,7 +80,7 @@ func (t *Tracker) downloadScheduler() {
 					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 15*time.Second {
 						t.peers.seeders.Range(func(_, value any) bool {
 							p := value.(*peer.Peer)
-							canCancel := p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished)
+							canCancel := p.ConnectionStatus() == peer.ConnectionEstablished
 							canCancel = canCancel && p.Status.Remote.Load() == uint32(peer.UnChoked)
 							if canCancel {
 								err := p.SendCancel(&messagesv1.Cancel{
@@ -120,7 +117,7 @@ func (t *Tracker) downloadScheduler() {
 
 					t.peers.seeders.Range(func(_, value any) bool {
 						p := value.(*peer.Peer)
-						canRequest := p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished)
+						canRequest := p.ConnectionStatus() == peer.ConnectionEstablished
 						canRequest = canRequest && p.Status.Remote.Load() == uint32(peer.UnChoked)
 						canRequest = canRequest && p.Bitfield.Check(piece.Index)
 						if canRequest {
@@ -166,7 +163,6 @@ func (t *Tracker) downloadScheduler() {
 				if freeSlots == len(t.download.requests) {
 					t.logger.Info("Downloaded all pieces shutting down piece downloader")
 					close(t.download.completed)
-					t.download.wg.Done()
 					return
 				}
 				continue
@@ -222,14 +218,13 @@ func (t *Tracker) downloadScheduler() {
 	}
 }
 
-func (t *Tracker) recvPieces(p *peer.Peer) {
-	logger := t.logger.With(slog.String("peer_ip", p.Addr), slog.String("pid", p.Id))
+func (t *Tracker) recvPieces(logger *slog.Logger, pieces <-chan *messagesv1.Piece) {
+	defer t.download.wg.Done()
 	for {
 		select {
-		case recv, ok := <-p.SeederPieces():
+		case recv, ok := <-pieces:
 			if !ok {
 				logger.Debug("shutting piece downloader, channel closed")
-				t.download.wg.Done()
 				return
 			}
 
@@ -309,47 +304,25 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 				}
 				digest := sha1.Sum(data)
 
-				// TODO: randomly choose to invalidate hashes to test stability of the implementation.
-				// it should eventually still manage to download.
 				if !bytes.Equal(digest[:], t.Torrent.PieceHash(recv.Index)) {
-					logger.Debug("invalid piece sha1 hash, stop tracking", slog.String("piece", fmt.Sprint(recv.Index)))
-					if err := p.Close(); err != nil {
-						logger.Error("failed to close peer after invalid sha1 hash", slog.String("piece", fmt.Sprint(recv.Index)))
-					}
-					// retry downloading the piece again.
-					if len(piece.Pending) != 0 {
+					logger.Error("invalid piece sha1 hash, retrying", slog.String("piece", fmt.Sprint(recv.Index)))
+					// TODO: mark peer as malicious and close connection.
+					t.Downloaded.Add(-piece.Size)
+					if err := piece.Retry(); err != nil {
 						piece.l.Unlock()
 						panic("malformed state, expected no pending requests when rescheduling piece for retry download")
 					}
-					for _, tr := range piece.InFlight {
-						piece.Pending = append(piece.Pending, &messagesv1.Request{
-							Index:  tr.request.Index,
-							Begin:  tr.request.Begin,
-							Length: tr.request.Length,
-						})
-					}
-					piece.InFlight = nil
-					piece.Received = nil
 					piece.l.Unlock()
 					continue
 				}
 
 				if err := t.Flush(recv.Index, data); err != nil {
 					logger.Error("failed to flush piece", slog.Any("err", err), slog.String("piece", fmt.Sprint(recv.Index)))
-					// retry downloading the piece again.
-					if len(piece.Pending) != 0 {
+					t.Downloaded.Add(-piece.Size)
+					if err := piece.Retry(); err != nil {
 						piece.l.Unlock()
 						panic("malformed state, expected no pending requests when rescheduling piece for retry download")
 					}
-					for _, tr := range piece.InFlight {
-						piece.Pending = append(piece.Pending, &messagesv1.Request{
-							Index:  tr.request.Index,
-							Begin:  tr.request.Begin,
-							Length: tr.request.Length,
-						})
-					}
-					piece.InFlight = nil
-					piece.Received = nil
 					piece.l.Unlock()
 					continue
 				}
@@ -358,11 +331,22 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 
 				logger.Debug("sending have message for verified piece", slog.String("piece", fmt.Sprint(recv.Index)))
 
+				// send have message to all peers.
 				t.peers.seeders.Range(func(_, value any) bool {
-					if p := value.(*peer.Peer); p.ConnectionStatus.Load() == uint32(peer.ConnectionEstablished) {
+					if p := value.(*peer.Peer); p.ConnectionStatus() == peer.ConnectionEstablished {
 						if err := p.SendHave(&messagesv1.Have{Index: recv.Index}); err != nil {
-							logger.Error("failed to send have piece, after verifying",
-								slog.Any("err", err),
+							logger.Error("failed to send have piece, after verifying", slog.Any("err", err),
+								slog.String("end_peer", p.Id),
+								slog.String("piece", fmt.Sprint(recv.Index)),
+							)
+						}
+					}
+					return true
+				})
+				t.peers.leechers.Range(func(_, value any) bool {
+					if p := value.(*peer.Peer); p.ConnectionStatus() == peer.ConnectionEstablished {
+						if err := p.SendHave(&messagesv1.Have{Index: recv.Index}); err != nil {
+							logger.Error("failed to send have piece, after verifying", slog.Any("err", err),
 								slog.String("end_peer", p.Id),
 								slog.String("piece", fmt.Sprint(recv.Index)),
 							)
@@ -388,68 +372,75 @@ func (t *Tracker) recvPieces(p *peer.Peer) {
 	}
 }
 
-func (t *Tracker) keepAliveSeeders(p *peer.Peer) {
-	logger := t.logger.With(slog.String("peer_ip", p.Addr), slog.String("pid", p.Id))
+func (t *Tracker) keepAliveSeeders(addr string) {
+	logger := t.logger.With(slog.String("peer_ip", addr))
+
+	var p *peer.Peer
+	defer func() {
+		if err := p.SendNotInterested(); err != nil {
+			logger.Error("failed to send not-interested msg", slog.Any("err", err))
+		}
+		if err := p.Close(); err != nil {
+			logger.Error("failed to close peer", slog.Any("err", err))
+		}
+
+		t.download.wg.Done()
+	}()
+
 	refresh := time.NewTicker(1 * time.Nanosecond) // first tick happens immediately.
 	for {
 		select {
 		case <-t.stop:
-			if err := p.SendNotInterested(); err != nil {
-				logger.Error("failed to send not-interested msg, after successful download")
-			}
 			logger.Debug("shutting down peer refresher, stopped tracker")
-			if err := p.Close(); err != nil {
-				logger.Error("failed to close peer", slog.Any("err", err))
-			}
-			t.download.wg.Done()
 			return
 		case <-t.download.cancel:
 			logger.Debug("shutting down peer refresher, canceled download")
-			if err := p.Close(); err != nil {
-				logger.Error("failed to close peer", slog.Any("err", err))
-			}
-			t.download.wg.Done()
 			return
 		case <-t.download.completed:
-			if err := p.SendNotInterested(); err != nil {
-				logger.Error("failed to send not-interested msg, after successful download")
-			}
 			logger.Debug("shutting down peer refresher, as torrent was downloaded")
-			if err := p.Close(); err != nil {
-				logger.Error("failed to close peer", slog.Any("err", err))
-			}
-			t.download.wg.Done()
 			return
 		case <-refresh.C:
 			refresh.Reset(2 * time.Minute)
-			switch s := peer.ConnectionStatus(p.ConnectionStatus.Load()); s {
-			case peer.ConnectionPending, peer.ConnectionKilled:
-				logger.Debug("attempting to connect with peer")
-				if err := p.ConnectSeeder(); err != nil {
-					logger.Error("failed to reconnect with peer", slog.Any("err", err))
-					continue
+			switch p.ConnectionStatus() {
+			case peer.ConnectionKilled:
+				if err := p.Close(); err != nil {
+					logger.Error("failed to close peer", slog.Any("err", err))
 				}
-				logger.Debug("initiating handshake")
-				if err := p.InitiateHandshakeV1(string(t.Torrent.Metadata.Hash[:]), t.clientID); err != nil {
+				t.peers.seeders.Delete(addr)
+
+				var err error
+				p, err = peer.NewSeederConnection(
+					logger,
+					addr,
+					t.Torrent.NumPieces(),
+					string(t.Torrent.Metadata.Hash[:]),
+					t.clientID,
+				)
+				if err != nil {
 					logger.Error("failed to initiating handshake", slog.Any("err", err))
-					if err := p.Close(); err != nil {
-						logger.Error("failed to close peer", slog.Any("err", err))
-					}
 					continue
 				}
+
+				t.peers.seeders.Store(addr, p)
+
+				// Listen for incoming pieces.
+				t.download.wg.Add(1)
+				go t.recvPieces(logger.With(slog.String("pid", p.Id)), p.Pieces())
+
 				if err := p.SendBitfield(t.BitField.Clone()); err != nil {
 					logger.Error("failed to send bitfield msg")
 				}
+
 				if err := p.SendInterested(); err != nil {
 					logger.Error("failed to send interested msg")
 				}
-				// Listen for pieces.
-				t.download.wg.Add(1)
-				go t.recvPieces(p)
 			case peer.ConnectionEstablished:
-				logger.Info("sending keep alive event on torrent peer")
+				logger.Debug("sending keep alive event on torrent peer")
 				if err := p.SendKeepAlive(); err != nil {
-					logger.Error("failed to keep alive", slog.Any("err", err))
+					logger.Error("failed to keep alive, closing", slog.Any("err", err))
+					if err := p.Close(); err != nil {
+						logger.Error("failed to close peer", slog.Any("err", err))
+					}
 				}
 			}
 		}

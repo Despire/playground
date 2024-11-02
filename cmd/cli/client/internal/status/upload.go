@@ -1,7 +1,6 @@
 package status
 
 import (
-	"fmt"
 	"log/slog"
 	"net"
 	"time"
@@ -13,47 +12,47 @@ import (
 func (t *Tracker) CancelUpload() { close(t.upload.cancel); t.upload.wg.Wait() }
 
 func (t *Tracker) AddLeecher(id string, conn net.Conn) error {
-	np := peer.NewLeecher(
-		t.logger,
-		id,
-		conn.RemoteAddr().String(),
-		t.Torrent.NumPieces(),
-		conn,
-	)
-
-	infoHash := string(t.Torrent.Metadata.Hash[:])
-	if err := np.SendHandshakeV1(infoHash, t.clientID); err != nil {
-		return fmt.Errorf("failed to send handshake: %w", err)
-	}
-
-	t.peers.leechers.Store(conn.RemoteAddr().String(), np)
-
-	if err := np.SendBitfield(t.BitField.Clone()); err != nil {
-		return fmt.Errorf("failed to send bitfield")
-	}
-
-	t.upload.wg.Add(2)
-	go t.keepAliveLeechers(np)
-	go t.handleRequests(np)
+	//np := peer.NewLeecher(
+	//	t.logger,
+	//	id,
+	//	conn.RemoteAddr().String(),
+	//	t.Torrent.NumPieces(),
+	//	conn,
+	//)
+	//
+	//infoHash := string(t.Torrent.Metadata.Hash[:])
+	//if err := np.SendHandshakeV1(infoHash, t.clientID); err != nil {
+	//	return fmt.Errorf("failed to send handshake: %w", err)
+	//}
+	//
+	//t.peers.leechers.Store(conn.RemoteAddr().String(), np)
+	//
+	//if err := np.SendBitfield(t.BitField.Clone()); err != nil {
+	//	t.peers.leechers.Delete(conn.RemoteAddr().String())
+	//	return fmt.Errorf("failed to send bitfield")
+	//}
+	//
+	//t.upload.wg.Add(2)
+	//go t.keepAliveLeechers(np)
+	//go t.handleRequests(np)
 	return nil
 }
 
 func (t *Tracker) processUploadRequests() {
+	defer t.upload.wg.Done()
 	currentRate := int64(0)
 	rateTicker := time.NewTicker(rateTick)
 	for {
 		select {
 		case <-t.stop:
 			t.logger.Info("shutting down piece uploader, closed tracker")
-			t.upload.wg.Done()
 			return
 		case <-t.upload.cancel:
 			t.logger.Info("shutting down piece uploader, canceled upload")
-			t.upload.wg.Done()
 			return
 		case <-rateTicker.C:
 			newRate := t.Uploaded.Load()
-			diff := newRate - currentRate
+			diff := max(0, newRate-currentRate)
 			t.upload.rate.Store(diff)
 			currentRate = newRate
 		default:
@@ -90,9 +89,8 @@ func (t *Tracker) processUploadRequests() {
 	}
 }
 
-func (t *Tracker) handleRequests(p *peer.Peer) {
+func (t *Tracker) handleRequests(p *peer.Peer, requests <-chan *messagesv1.Request, cancels <-chan *messagesv1.Cancel) {
 	logger := t.logger.With(slog.String("peer_ip", p.Addr), slog.String("pid", p.Id))
-	requests, cancels := p.LeecherRequests()
 	for {
 		select {
 		case c, ok := <-cancels:
@@ -175,8 +173,9 @@ func (t *Tracker) keepAliveLeechers(p *peer.Peer) {
 			return
 		case <-refresh.C:
 			refresh.Reset(2 * time.Minute)
-			switch s := peer.ConnectionStatus(p.ConnectionStatus.Load()); s {
-			case peer.ConnectionKilled, peer.ConnectionPending:
+			switch s := p.ConnectionStatus(); s {
+			// TODO: connection pending
+			case peer.ConnectionKilled:
 				logger.Info("shutting down peer refresher, connection closed")
 				if err := p.Close(); err != nil {
 					logger.Error("failed to close peer", slog.Any("err", err))

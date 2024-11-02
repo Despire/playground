@@ -50,7 +50,7 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		case "both":
 			action = "both"
 		default:
-			return fmt.Errorf("unsupported torrent action %v, supported only (leech|seed|both)")
+			return fmt.Errorf("unsupported torrent action %v, supported only (leech|seed|both)", args[1])
 		}
 	}
 
@@ -91,7 +91,7 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 				}
 				return fmt.Errorf("failed to wait for work on torrent %s to finish: %w", id, err)
 			}
-			if ok {
+			if !ok {
 				logger.Info("successfully downloaded torrent", slog.String("id", id))
 			}
 		}

@@ -91,6 +91,16 @@ func (p *Client) Close() error {
 	}
 	close(p.done)
 	p.wg.Wait()
+
+	p.torrentsDownloading.Range(func(key, value any) bool {
+		id := key.(string)
+		tr := value.(*status.Tracker)
+		if err := tr.Close(); err != nil {
+			p.logger.Error("failed to stop torrent", slog.String("torrent", id))
+		}
+		return true
+	})
+	p.torrentsDownloading.Clear()
 	return nil
 }
 
@@ -171,6 +181,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 
 					if errAll != nil {
 						r <- fmt.Errorf("failed to reconstruct downloaded torrent: %w", errAll)
+						break
 					}
 				case tr.Torrent.InfoMultiFile != nil:
 					parent := filepath.Join(tr.DownloadDir, tr.Torrent.InfoMultiFile.Name)
@@ -254,6 +265,7 @@ func (p *Client) WaitFor(id string) <-chan error {
 
 					if errAll != nil {
 						r <- fmt.Errorf("failed to reconstruct multi-file torrent: %w", errAll)
+						break
 					}
 				}
 				return
@@ -290,18 +302,8 @@ func (p *Client) watch() {
 			p.wg.Add(1)
 			go p.downloadTorrent(ctx, infoHash, t.(*status.Tracker))
 		case <-p.done:
+			p.logger.Info("received signal to stop, issueing cancel to all torrents")
 			cancel()
-			p.logger.Info("received signal to stop, stopping all torrents")
-
-			p.torrentsDownloading.Range(func(key, value any) bool {
-				id := key.(string)
-				tr := value.(*status.Tracker)
-				if err := tr.Close(); err != nil {
-					p.logger.Error("failed to stop torrent", slog.String("torrent", id))
-				}
-				return true
-			})
-			p.torrentsDownloading.Clear()
 			return
 		}
 	}
@@ -313,7 +315,6 @@ func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status
 
 	var start *tracker.Response
 
-	// TODO: adjust this to become a seeder aswell.
 tracker:
 	for {
 		select {
@@ -378,10 +379,10 @@ tracker:
 				logger.Error("failed announce stop to tracker", slog.Any("err", err))
 			}
 
-			logger.Info("stopping download, context canceled")
-
 			t.CancelDownload()
 			c.wg.Done()
+
+			logger.Info("stopping download, context canceled")
 			return
 		case <-t.WaitUntilDownloaded():
 			logger.Info("sending completed update, finished downloaded torrent")
@@ -401,6 +402,7 @@ tracker:
 			}
 			t.CancelDownload()
 			c.wg.Done()
+			logger.Info("download completed")
 			return
 		case <-ticker.C:
 			logger.Info("sending regular update based on interval")

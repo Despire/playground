@@ -2,7 +2,6 @@ package peer
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,13 +47,10 @@ const (
 type ConnectionStatus int32
 
 const (
-	// ConnectionPending connection describes a state where a client
-	// is waiting for the Peer to send the Handshake.
-	ConnectionPending ConnectionStatus = iota
 	// ConnectionEstablished connection describes a state where a peer
 	// has sent the Handshake and both clients speak the same
 	// protocol.
-	ConnectionEstablished
+	ConnectionEstablished ConnectionStatus = iota
 	// ConnectionKilled connection describes a connection that was
 	// terminated.
 	ConnectionKilled
@@ -75,7 +71,7 @@ type Peer struct {
 
 	wg               sync.WaitGroup
 	conn             net.Conn
-	ConnectionStatus atomic.Uint32
+	connectionStatus atomic.Uint32
 	typ              peerType
 
 	Status struct {
@@ -100,14 +96,15 @@ type Peer struct {
 	Bitfield *bitfield.BitField
 }
 
-func NewSeeder(logger *slog.Logger, id, addr string, numPieces int64) *Peer {
-	if id != "" {
-		logger = logger.With(slog.String("peer_id", id))
-	}
-
+func NewSeederConnection(
+	logger *slog.Logger,
+	addr string,
+	numPieces int64,
+	infoHash string,
+	clientId string,
+) (*Peer, error) {
 	p := &Peer{
 		logger:   logger,
-		Id:       id,
 		Addr:     addr,
 		conn:     nil,
 		wg:       sync.WaitGroup{},
@@ -115,12 +112,37 @@ func NewSeeder(logger *slog.Logger, id, addr string, numPieces int64) *Peer {
 		typ:      seeder,
 	}
 
+	p.Status.Remote.Store(uint32(Choked))
+	p.Status.This.Store(uint32(Choked))
+
+	p.Interest.Remote.Store(uint32(NotInterested))
+	p.Interest.This.Store(uint32(NotInterested))
+
+	if err := p.initiateHandshakeV1(infoHash, clientId); err != nil {
+		if p.conn != nil {
+			if errClose := p.conn.Close(); errClose != nil {
+				return nil, fmt.Errorf("%w: %w", err, errClose)
+			}
+		}
+		return nil, err
+	}
+
 	p.seeder.pieces = make(chan *messagesv1.Piece)
 
-	return p
+	p.wg.Add(1)
+	go p.listener()
+
+	p.connectionStatus.Store(uint32(ConnectionEstablished))
+
+	return p, nil
 }
 
-func NewLeecher(logger *slog.Logger, id, addr string, numPieces int64, conn net.Conn) *Peer {
+func NewLeecherConnection(
+	logger *slog.Logger,
+	id, addr string,
+	numPieces int64,
+	conn net.Conn,
+) (*Peer, <-chan *messagesv1.Request, <-chan *messagesv1.Cancel) {
 	p := &Peer{
 		logger:   logger.With(slog.String("peer_id", id)),
 		Id:       id,
@@ -131,7 +153,7 @@ func NewLeecher(logger *slog.Logger, id, addr string, numPieces int64, conn net.
 		typ:      leecher,
 	}
 
-	p.ConnectionStatus.Store(uint32(ConnectionEstablished))
+	p.connectionStatus.Store(uint32(ConnectionEstablished))
 
 	p.Status.Remote.Store(uint32(Choked))
 	p.Status.This.Store(uint32(Choked))
@@ -145,60 +167,55 @@ func NewLeecher(logger *slog.Logger, id, addr string, numPieces int64, conn net.
 	p.wg.Add(1)
 	go p.listener()
 
-	return p
+	return p, p.leecher.requests, p.leecher.cancels
 }
 
-func (p *Peer) SeederPieces() <-chan *messagesv1.Piece { return p.seeder.pieces }
-
-func (p *Peer) LeecherRequests() (<-chan *messagesv1.Request, <-chan *messagesv1.Cancel) {
-	return p.leecher.requests, p.leecher.cancels
+func (p *Peer) ConnectionStatus() ConnectionStatus {
+	if p == nil {
+		return ConnectionKilled
+	}
+	switch p.connectionStatus.Load() {
+	case uint32(ConnectionKilled):
+		return ConnectionKilled
+	case uint32(ConnectionEstablished):
+		return ConnectionEstablished
+	default:
+		panic("unknown connection status")
+	}
 }
 
 func (p *Peer) Close() error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionKilled) {
-		var err error
-		if p.conn != nil {
-			err = p.conn.Close()
-		}
-		p.ConnectionStatus.Store(uint32(ConnectionKilled))
-		p.wg.Wait()
-		return err
+	if p == nil {
+		return nil
 	}
-	return nil
+	var err error
+	if p.conn != nil {
+		err = p.conn.Close()
+	}
+	p.wg.Wait()
+	p.connectionStatus.Store(uint32(ConnectionKilled))
+	return err
 }
 
-func (p *Peer) ConnectSeeder() error {
-	if p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
-		return errors.New("cannot connect on an already healthy connection")
+func (p *Peer) Pieces() <-chan *messagesv1.Piece { return p.seeder.pieces }
+
+// InitiateHandshakeV1 performs the handshake according to the version 1.0
+// of the specifications. After a successful handshake a new goroutine
+// is spawned that actively listens, on the established BitTorrent
+// channel to decode incoming messages. Incoming pieces request will
+// be sent to the returned channel and it is expected that a goroutine
+// will be listening on that channel otherwise the peer deadlocks.
+func (p *Peer) initiateHandshakeV1(infoHash, peerID string) error {
+	if p == nil {
+		return nil
 	}
 
-	var err error
-	p.conn, err = net.DialTimeout("tcp", p.Addr, 10*time.Second)
+	conn, err := net.DialTimeout("tcp", p.Addr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to re-connect to peer at %s: %w", p.Addr, err)
 	}
 
-	p.ConnectionStatus.Store(uint32(ConnectionPending))
-
-	p.Status.Remote.Store(uint32(Choked))
-	p.Status.This.Store(uint32(Choked))
-
-	p.Interest.Remote.Store(uint32(NotInterested))
-	p.Interest.This.Store(uint32(NotInterested))
-
-	p.seeder.pieces = make(chan *messagesv1.Piece)
-
-	return nil
-}
-
-// InitiateHandshakeV1 performs the handshake according to the version 1.0
-// of the specifications. After a successful handshake a new goroutine
-// is spawned that actively listens. on the established BitTorrent
-// channel to decode incoming messages.
-func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
-	if p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
-		return nil
-	}
+	p.conn = conn
 
 	h := messagesv1.Handshake{
 		Pstr:     messagesv1.ProtocolV1,
@@ -209,6 +226,10 @@ func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
 
 	msg := h.Serialize()
 
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
+	}
+
 	w, err := io.Copy(p.conn, bytes.NewReader(msg))
 	if err != nil {
 		return fmt.Errorf("failed to write v1 handshake message: %w", err)
@@ -216,6 +237,10 @@ func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
 
 	if int(w) != len(msg) {
 		return fmt.Errorf("failed to write all of the v1 handshake message")
+	}
+
+	if err := p.conn.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	var resp [messagesv1.HandshakeLength]byte
@@ -235,16 +260,16 @@ func (p *Peer) InitiateHandshakeV1(infoHash, peerID string) error {
 	// adjust peer information.
 	p.Id = h.PeerID
 	p.logger = p.logger.With(slog.String("peer_id", p.Id))
-	p.ConnectionStatus.Store(uint32(ConnectionEstablished))
-
-	p.wg.Add(1)
-	go p.listener()
 
 	return nil
 }
 
 func (p *Peer) SendHandshakeV1(infoHash, peerID string) error {
-	if p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() == uint32(ConnectionEstablished) {
 		return nil
 	}
 
@@ -253,6 +278,10 @@ func (p *Peer) SendHandshakeV1(infoHash, peerID string) error {
 		Reserved: [8]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
 		InfoHash: infoHash,
 		PeerID:   peerID,
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := h.Serialize()
@@ -270,11 +299,19 @@ func (p *Peer) SendHandshakeV1(infoHash, peerID string) error {
 }
 
 func (p *Peer) SendKeepAlive() error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := new(messagesv1.KeepAlive).Serialize()
@@ -290,11 +327,19 @@ func (p *Peer) SendKeepAlive() error {
 }
 
 func (p *Peer) SendUnchoke() error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := new(messagesv1.Unchoke).Serialize()
@@ -310,11 +355,19 @@ func (p *Peer) SendUnchoke() error {
 }
 
 func (p *Peer) SendChoke() error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := new(messagesv1.Choke).Serialize()
@@ -330,11 +383,19 @@ func (p *Peer) SendChoke() error {
 }
 
 func (p *Peer) SendInterested() error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := new(messagesv1.Interest).Serialize()
@@ -350,11 +411,18 @@ func (p *Peer) SendInterested() error {
 }
 
 func (p *Peer) SendNotInterested() error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := new(messagesv1.NotInterest).Serialize()
@@ -370,11 +438,19 @@ func (p *Peer) SendNotInterested() error {
 }
 
 func (p *Peer) SendBitfield(b []byte) error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := (&messagesv1.Bitfield{Bitfield: b}).Serialize()
@@ -389,15 +465,23 @@ func (p *Peer) SendBitfield(b []byte) error {
 }
 
 func (p *Peer) SendRequest(req *messagesv1.Request) error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
 	}
 
 	if err := req.Validate(); err != nil {
 		return fmt.Errorf("invalid request: %w", err)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := req.Serialize()
@@ -412,15 +496,23 @@ func (p *Peer) SendRequest(req *messagesv1.Request) error {
 }
 
 func (p *Peer) SendCancel(cancel *messagesv1.Cancel) error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
 	}
 
 	if err := cancel.Validate(); err != nil {
 		return fmt.Errorf("invalid request: %w", err)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := cancel.Serialize()
@@ -435,11 +527,19 @@ func (p *Peer) SendCancel(cancel *messagesv1.Cancel) error {
 }
 
 func (p *Peer) SendHave(have *messagesv1.Have) error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := have.Serialize()
@@ -454,11 +554,19 @@ func (p *Peer) SendHave(have *messagesv1.Have) error {
 }
 
 func (p *Peer) SendPiece(piece *messagesv1.Piece) error {
-	if p.ConnectionStatus.Load() != uint32(ConnectionEstablished) {
+	if p == nil {
+		return nil
+	}
+
+	if p.connectionStatus.Load() != uint32(ConnectionEstablished) {
 		return fmt.Errorf("invalid connection status %s, needed %s",
-			ConnectionStatus(p.ConnectionStatus.Load()),
+			ConnectionStatus(p.connectionStatus.Load()),
 			ConnectionEstablished,
 		)
+	}
+
+	if err := p.conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return err
 	}
 
 	msg := piece.Serialize()

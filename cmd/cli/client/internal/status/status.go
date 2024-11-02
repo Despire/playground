@@ -43,6 +43,24 @@ type pendingPiece struct {
 	InFlight   []*timedDownloadRequest
 }
 
+func (p *pendingPiece) Retry() error {
+	if len(p.Pending) != 0 {
+		return errors.New("expected no pending requests when rescheduling piece for retry download")
+	}
+
+	for _, tr := range p.InFlight {
+		p.Pending = append(p.Pending, &messagesv1.Request{
+			Index:  tr.request.Index,
+			Begin:  tr.request.Begin,
+			Length: tr.request.Length,
+		})
+	}
+	p.InFlight = nil
+	p.Received = nil
+	p.Downloaded = 0
+	return nil
+}
+
 type peers struct {
 	seeders  sync.Map
 	leechers sync.Map
@@ -156,7 +174,6 @@ func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, d
 
 func (t *Tracker) Close() error {
 	var errAll error
-	// write bitfiled to file
 	b, err := os.Create(filepath.Join(t.DownloadDir, "bitfield.bin"))
 	if err != nil {
 		errAll = errors.Join(errAll, fmt.Errorf("failed creating bitfiled file: %w", err))
