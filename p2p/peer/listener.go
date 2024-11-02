@@ -19,9 +19,7 @@ const KeepAliveTimeout = 3 * time.Minute
 func (p *Peer) listener() {
 	for p.ConnectionStatus.Load() == uint32(ConnectionEstablished) {
 		if err := p.conn.SetReadDeadline(time.Now().Add(KeepAliveTimeout)); err != nil {
-			p.logger.Debug("failed to set read deadline to KeepAliveTimeout",
-				slog.String("err", err.Error()),
-			)
+			p.logger.Debug("failed to set read deadline to KeepAliveTimeout", slog.Any("err", err))
 			continue
 		}
 
@@ -35,16 +33,13 @@ func (p *Peer) listener() {
 				p.logger.Debug("closed connection, peer read EOF reading from connection.")
 				break
 			}
-			p.logger.Error("failed to read from connection", slog.String("err", err.Error()))
+			p.logger.Error("failed to read from connection", slog.Any("err", err))
 			continue
 		}
 
 		p.logger.Debug("received message type", slog.String("type", msg.Type.String()))
 		if err := p.process(msg); err != nil {
-			p.logger.Error("failed to process message",
-				slog.String("type", msg.Type.String()),
-				slog.String("err", err.Error()),
-			)
+			p.logger.Error("failed to process message", slog.String("type", msg.Type.String()), slog.Any("err", err))
 		}
 	}
 
@@ -58,7 +53,7 @@ func (p *Peer) listener() {
 
 	if p.conn != nil {
 		if err := p.conn.Close(); err != nil {
-			p.logger.Debug("failed to close connection", slog.String("err", err.Error()))
+			p.logger.Debug("failed to close connection", slog.Any("err", err))
 		}
 	}
 

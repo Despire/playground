@@ -73,7 +73,7 @@ type Upload struct {
 	// Requests are the number of maximum requests
 	// that will be handled by the client for any
 	// number of connected leechers.
-	requests [100]atomic.Pointer[timedUploadRequest]
+	requests [20]atomic.Pointer[timedUploadRequest]
 	// The wait group is used when spawning upload related goroutines.
 	wg sync.WaitGroup
 	// Upload related signaling. When the torrent
@@ -114,7 +114,7 @@ type Tracker struct {
 func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, downloadDir string) (*Tracker, error) {
 	tr := Tracker{
 		clientID:    clientID,
-		logger:      logger,
+		logger:      logger.With(slog.String("url", t.Announce), slog.String("infoHash", string(t.Metadata.Hash[:]))),
 		stop:        make(chan struct{}),
 		Torrent:     t,
 		BitField:    bitfield.NewBitfield(t.NumPieces()),
@@ -190,7 +190,6 @@ func (t *Tracker) Flush(idx uint32, pieceBytes []byte) error {
 	return binary.Write(f, binary.LittleEndian, pieceBytes)
 }
 
-// TODO: add tests.
 func (t *Tracker) ReadRequest(req *messagesv1.Request) ([]byte, error) {
 	if _, err := os.Stat(t.DownloadDir); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("cannot construct request: %w", err)

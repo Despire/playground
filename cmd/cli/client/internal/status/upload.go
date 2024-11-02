@@ -25,11 +25,13 @@ func (t *Tracker) AddLeecher(id string, conn net.Conn) error {
 	if err := np.SendHandshakeV1(infoHash, t.clientID); err != nil {
 		return fmt.Errorf("failed to send handshake: %w", err)
 	}
+
+	t.peers.leechers.Store(conn.RemoteAddr().String(), np)
+
 	if err := np.SendBitfield(t.BitField.Clone()); err != nil {
 		return fmt.Errorf("failed to send bitfield")
 	}
 
-	t.peers.leechers.Store(conn.RemoteAddr().String(), np)
 	t.upload.wg.Add(2)
 	go t.keepAliveLeechers(np)
 	go t.handleRequests(np)
@@ -37,24 +39,16 @@ func (t *Tracker) AddLeecher(id string, conn net.Conn) error {
 }
 
 func (t *Tracker) processUploadRequests() {
-	infoHash := string(t.Torrent.Metadata.Hash[:])
-
 	currentRate := int64(0)
 	rateTicker := time.NewTicker(rateTick)
 	for {
 		select {
 		case <-t.stop:
-			t.logger.Info("shutting down piece uploader, closed tracker",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-			)
+			t.logger.Info("shutting down piece uploader, closed tracker")
 			t.upload.wg.Done()
 			return
 		case <-t.upload.cancel:
-			t.logger.Info("shutting down piece uploader, canceled upload",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-			)
+			t.logger.Info("shutting down piece uploader, canceled upload")
 			t.upload.wg.Done()
 			return
 		case <-rateTicker.C:
@@ -97,17 +91,13 @@ func (t *Tracker) processUploadRequests() {
 }
 
 func (t *Tracker) handleRequests(p *peer.Peer) {
-	infoHash := string(t.Torrent.Metadata.Hash[:])
+	logger := t.logger.With(slog.String("peer_ip", p.Addr), slog.String("pid", p.Id))
 	requests, cancels := p.LeecherRequests()
 	for {
 		select {
 		case c, ok := <-cancels:
 			if !ok {
-				t.logger.Debug("shutting request handler, channel closed",
-					slog.String("peer", p.Id),
-					slog.String("url", t.Torrent.Announce),
-					slog.String("infoHash", infoHash),
-				)
+				logger.Debug("shutting request handler, channel closed")
 				t.upload.wg.Done()
 				return
 			}
@@ -125,11 +115,7 @@ func (t *Tracker) handleRequests(p *peer.Peer) {
 			}
 		case r, ok := <-requests:
 			if !ok {
-				t.logger.Debug("shutting request handler, channel closed",
-					slog.String("peer", p.Id),
-					slog.String("url", t.Torrent.Announce),
-					slog.String("infoHash", infoHash),
-				)
+				logger.Debug("shutting request handler, channel closed")
 				t.upload.wg.Done()
 				return
 			}
@@ -169,41 +155,21 @@ func (t *Tracker) handleRequests(p *peer.Peer) {
 }
 
 func (t *Tracker) keepAliveLeechers(p *peer.Peer) {
+	logger := t.logger.With(slog.String("peer_ip", p.Addr), slog.String("pid", p.Id))
 	refresh := time.NewTicker(1 * time.Nanosecond) // first tick happens immediately.
-	infoHash := string(t.Torrent.Metadata.Hash[:])
 	for {
 		select {
 		case <-t.stop:
-			t.logger.Debug("shutting down peer refresher, stopped tracker",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-				slog.String("peer", p.Id),
-			)
+			logger.Debug("shutting down peer refresher, stopped tracker")
 			if err := p.Close(); err != nil {
-				t.logger.Error("failed to close peer",
-					slog.String("peer_ip", p.Addr),
-					slog.String("peer_addr", p.Id),
-					slog.String("url", t.Torrent.Announce),
-					slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
-					slog.String("err", err.Error()),
-				)
+				logger.Error("failed to close peer", slog.Any("err", err))
 			}
 			t.upload.wg.Done()
 			return
 		case <-t.upload.cancel:
-			t.logger.Debug("shutting down peer refresher, canceled upload",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-				slog.String("peer", p.Id),
-			)
+			logger.Debug("shutting down peer refresher, canceled upload")
 			if err := p.Close(); err != nil {
-				t.logger.Error("failed to close peer",
-					slog.String("peer_ip", p.Addr),
-					slog.String("peer_addr", p.Id),
-					slog.String("url", t.Torrent.Announce),
-					slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
-					slog.String("err", err.Error()),
-				)
+				logger.Error("failed to close peer", slog.Any("err", err.Error()))
 			}
 			t.upload.wg.Done()
 			return
@@ -211,37 +177,17 @@ func (t *Tracker) keepAliveLeechers(p *peer.Peer) {
 			refresh.Reset(2 * time.Minute)
 			switch s := peer.ConnectionStatus(p.ConnectionStatus.Load()); s {
 			case peer.ConnectionKilled, peer.ConnectionPending:
-				t.logger.Info("shutting down peer refresher, connection closed",
-					slog.String("url", t.Torrent.Announce),
-					slog.String("infoHash", infoHash),
-					slog.String("peer", p.Id),
-				)
+				logger.Info("shutting down peer refresher, connection closed")
 				if err := p.Close(); err != nil {
-					t.logger.Error("failed to close peer",
-						slog.String("peer_ip", p.Addr),
-						slog.String("peer_addr", p.Id),
-						slog.String("url", t.Torrent.Announce),
-						slog.String("info_hash", string(t.Torrent.Metadata.Hash[:])),
-						slog.String("err", err.Error()),
-					)
+					logger.Error("failed to close peer", slog.Any("err", err))
 				}
 				t.peers.leechers.Delete(p.Addr)
 				t.upload.wg.Done()
 				return
 			case peer.ConnectionEstablished:
-				t.logger.Info("sending keep alive event on torrent peer",
-					slog.String("url", t.Torrent.Announce),
-					slog.String("infoHash", infoHash),
-					slog.String("peer_ip", p.Addr),
-					slog.String("peer", p.Id),
-				)
+				logger.Info("sending keep alive event on torrent peer")
 				if err := p.SendKeepAlive(); err != nil {
-					t.logger.Error("failed to keep alive",
-						slog.String("err", err.Error()),
-						slog.String("infoHash", infoHash),
-						slog.String("url", t.Torrent.Announce),
-						slog.String("peer", p.Id),
-					)
+					logger.Error("failed to keep alive", slog.Any("err", err))
 				}
 			}
 		}

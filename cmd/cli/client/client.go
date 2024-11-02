@@ -268,7 +268,7 @@ func (p *Client) acceptLeechers() {
 	for {
 		conn, err := p.seedServer.Accept()
 		if err != nil {
-			p.logger.Error("failed to accept new incoming connections", slog.String("err", err.Error()))
+			p.logger.Error("failed to accept new incoming connections", slog.Any("err", err))
 			if errors.Is(err, net.ErrClosed) {
 				break
 			}
@@ -308,6 +308,7 @@ func (p *Client) watch() {
 }
 
 func (c *Client) downloadTorrent(ctx context.Context, infoHash string, t *status.Tracker) {
+	logger := c.logger.With(slog.String("url", t.Torrent.Announce), slog.String("infoHash", infoHash))
 	const defaultPeerCount = 15
 
 	var start *tracker.Response
@@ -320,10 +321,7 @@ tracker:
 			c.wg.Done()
 			return
 		default:
-			c.logger.Debug("initiating communication with tracker",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-			)
+			logger.Debug("initiating communication with tracker")
 
 			var err error
 			start, err = tracker.CreateRequest(ctx, t.Torrent.Announce, &tracker.RequestParams{
@@ -338,10 +336,7 @@ tracker:
 				NumWant:    tracker.Optional[int64](defaultPeerCount),
 			})
 			if err != nil {
-				c.logger.Error("failed to contact tracker",
-					slog.String("err", err.Error()),
-					slog.String("infoHash", infoHash),
-				)
+				logger.Error("failed to contact tracker", slog.Any("err", err))
 				time.Sleep(10 * time.Second)
 				continue
 			}
@@ -350,38 +345,24 @@ tracker:
 	}
 
 	if start.Interval == nil {
-		c.logger.Error("tracker did not returned announce interval, aborting.",
-			slog.String("infoHash", infoHash),
-		)
+		logger.Error("tracker did not returned announce interval, aborting.")
 		c.wg.Done()
 		return
 	}
 
-	c.logger.Info("received valid interval at which updates will be published to the tracker",
-		slog.String("infoHash", infoHash),
-		slog.String("interval", fmt.Sprint(*start.Interval)),
-	)
+	logger.Info("received valid interval at which updates will be published to the tracker", slog.String("interval", fmt.Sprint(*start.Interval)))
 
 	if err := t.UpdateSeeders(start); err != nil {
-		c.logger.Error("failed to update peers, attempting to continue",
-			slog.String("err", err.Error()),
-			slog.String("infoHash", infoHash),
-		)
+		logger.Error("failed to update peers, attempting to continue", slog.Any("err", err))
 	}
 
-	c.logger.Debug("entering update loop",
-		slog.String("infoHash", infoHash),
-		slog.String("url", t.Torrent.Announce),
-	)
+	logger.Debug("entering update loop")
 
 	ticker := time.NewTicker(time.Duration(*start.Interval) * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("sending stop event on torrent",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-			)
+			logger.Info("sending stop event on torrent")
 			_, err := tracker.CreateRequest(context.Background(), t.Torrent.Announce, &tracker.RequestParams{
 				InfoHash:   infoHash,
 				PeerID:     c.id,
@@ -394,26 +375,16 @@ tracker:
 				TrackerID:  start.TrackerID,
 			})
 			if err != nil {
-				c.logger.Error("failed announce stop to tracker",
-					slog.String("err", err.Error()),
-					slog.String("infoHash", infoHash),
-					slog.String("url", t.Torrent.Announce),
-				)
+				logger.Error("failed announce stop to tracker", slog.Any("err", err))
 			}
 
-			c.logger.Info("stopping download, context canceled",
-				slog.String("url", t.Torrent.Announce),
-				slog.String("infoHash", infoHash),
-			)
+			logger.Info("stopping download, context canceled")
 
 			t.CancelDownload()
 			c.wg.Done()
 			return
 		case <-t.WaitUntilDownloaded():
-			c.logger.Info("sending completed update, finished downloaded torrent",
-				slog.String("infoHash", infoHash),
-				slog.String("url", t.Torrent.Announce),
-			)
+			logger.Info("sending completed update, finished downloaded torrent")
 			_, err := tracker.CreateRequest(context.Background(), t.Torrent.Announce, &tracker.RequestParams{
 				InfoHash:   infoHash,
 				PeerID:     c.id,
@@ -426,20 +397,13 @@ tracker:
 				TrackerID:  start.TrackerID,
 			})
 			if err != nil {
-				c.logger.Error("failed announce completed event to tracker",
-					slog.String("err", err.Error()),
-					slog.String("infoHash", infoHash),
-					slog.String("url", t.Torrent.Announce),
-				)
+				logger.Error("failed announce completed event to tracker", slog.Any("err", err))
 			}
 			t.CancelDownload()
 			c.wg.Done()
 			return
 		case <-ticker.C:
-			c.logger.Info("sending regular update based on interval",
-				slog.String("infoHash", infoHash),
-				slog.String("url", t.Torrent.Announce),
-			)
+			logger.Info("sending regular update based on interval")
 			var event *tracker.Event
 			if completed := (t.Torrent.BytesToDownload() - t.Downloaded.Load()) == 0; completed {
 				event = tracker.Optional(tracker.EventCompleted)
@@ -456,27 +420,16 @@ tracker:
 				TrackerID:  start.TrackerID,
 			})
 			if err != nil {
-				c.logger.Error("failed announce regular update to tracker",
-					slog.String("err", err.Error()),
-					slog.String("infoHash", infoHash),
-					slog.String("url", t.Torrent.Announce),
-				)
+				logger.Error("failed announce regular update to tracker", slog.Any("err", err))
 			}
 			if event != nil {
-				c.logger.Info("completed downloading torrent file",
-					slog.String("infoHash", infoHash),
-					slog.String("url", t.Torrent.Announce),
-				)
+				logger.Info("completed downloading torrent file")
 				t.CancelDownload()
 				c.wg.Done()
 				return
 			}
 			if err := t.UpdateSeeders(update); err != nil {
-				c.logger.Error("failed to update peers, attempting to continue",
-					slog.String("err", err.Error()),
-					slog.String("infoHash", infoHash),
-					slog.String("url", t.Torrent.Announce),
-				)
+				logger.Error("failed to update peers, attempting to continue", slog.Any("err", err))
 			}
 		}
 	}
