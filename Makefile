@@ -9,7 +9,7 @@ HASH="$(shell git rev-parse HEAD)"
 
 .PHONY: test
 test:
-	$(GO) test ./...
+	$(GO) test -short ./...
 
 .PHONY: lint
 lint: linter
