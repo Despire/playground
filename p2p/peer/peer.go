@@ -139,13 +139,14 @@ func NewSeederConnection(
 
 func NewLeecherConnection(
 	logger *slog.Logger,
-	id, addr string,
+	peerID, addr string,
 	numPieces int64,
 	conn net.Conn,
-) (*Peer, <-chan *messagesv1.Request, <-chan *messagesv1.Cancel) {
+	infoHash, clientId string,
+) (*Peer, error) {
 	p := &Peer{
-		logger:   logger.With(slog.String("peer_id", id)),
-		Id:       id,
+		logger:   logger.With(slog.String("peer_id", peerID)),
+		Id:       peerID,
 		Addr:     addr,
 		conn:     conn,
 		wg:       sync.WaitGroup{},
@@ -153,13 +154,18 @@ func NewLeecherConnection(
 		typ:      leecher,
 	}
 
-	p.connectionStatus.Store(uint32(ConnectionEstablished))
-
 	p.Status.Remote.Store(uint32(Choked))
 	p.Status.This.Store(uint32(Choked))
 
 	p.Interest.Remote.Store(uint32(NotInterested))
 	p.Interest.This.Store(uint32(NotInterested))
+
+	if err := p.sendHandshakeV1(infoHash, clientId); err != nil {
+		if errClose := conn.Close(); errClose != nil {
+			return nil, fmt.Errorf("%w: %w", err, errClose)
+		}
+		return nil, err
+	}
 
 	p.leecher.requests = make(chan *messagesv1.Request)
 	p.leecher.cancels = make(chan *messagesv1.Cancel)
@@ -167,7 +173,9 @@ func NewLeecherConnection(
 	p.wg.Add(1)
 	go p.listener()
 
-	return p, p.leecher.requests, p.leecher.cancels
+	p.connectionStatus.Store(uint32(ConnectionEstablished))
+
+	return p, nil
 }
 
 func (p *Peer) ConnectionStatus() ConnectionStatus {
@@ -198,6 +206,10 @@ func (p *Peer) Close() error {
 }
 
 func (p *Peer) Pieces() <-chan *messagesv1.Piece { return p.seeder.pieces }
+
+func (p *Peer) Requests() (<-chan *messagesv1.Request, <-chan *messagesv1.Cancel) {
+	return p.leecher.requests, p.leecher.cancels
+}
 
 // InitiateHandshakeV1 performs the handshake according to the version 1.0
 // of the specifications. After a successful handshake a new goroutine
@@ -264,12 +276,8 @@ func (p *Peer) initiateHandshakeV1(infoHash, peerID string) error {
 	return nil
 }
 
-func (p *Peer) SendHandshakeV1(infoHash, peerID string) error {
+func (p *Peer) sendHandshakeV1(infoHash, peerID string) error {
 	if p == nil {
-		return nil
-	}
-
-	if p.connectionStatus.Load() == uint32(ConnectionEstablished) {
 		return nil
 	}
 

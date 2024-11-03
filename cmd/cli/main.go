@@ -84,15 +84,12 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		case <-ctx.Done():
 			logger.Warn("interrupt signal received")
 			return c.Close()
-		case err, ok := <-done:
+		case err, _ := <-done:
 			if err != nil {
 				if err := c.Close(); err != nil {
 					logger.Error("failed to close client", "error", err)
 				}
 				return fmt.Errorf("failed to wait for work on torrent %s to finish: %w", id, err)
-			}
-			if !ok {
-				logger.Info("successfully downloaded torrent", slog.String("id", id))
 			}
 		}
 	}

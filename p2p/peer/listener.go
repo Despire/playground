@@ -117,6 +117,12 @@ func (p *Peer) process(msg *messagesv1.Message) error {
 			if err := req.Deserialize(msg.Payload); err != nil {
 				return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
 			}
+			if p.Status.This.Load() == uint32(Choked) {
+				return fmt.Errorf("dropped request as peer is choked")
+			}
+			if p.Interest.Remote.Load() == uint32(NotInterested) {
+				return fmt.Errorf("dropped request a peer is not interested")
+			}
 
 			p.leecher.requests <- req
 			return nil
@@ -128,6 +134,13 @@ func (p *Peer) process(msg *messagesv1.Message) error {
 
 			if err := cnc.Deserialize(msg.Payload); err != nil {
 				return fmt.Errorf("could not deserialize message %s: %w", msg.Type, err)
+			}
+
+			if p.Status.This.Load() == uint32(Choked) {
+				return fmt.Errorf("dropped request as peer is choked")
+			}
+			if p.Interest.Remote.Load() == uint32(NotInterested) {
+				return fmt.Errorf("dropped request a peer is not interested")
 			}
 
 			p.leecher.cancels <- cnc

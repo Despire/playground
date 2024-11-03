@@ -73,7 +73,7 @@ type Download struct {
 	// Requests are the number of pieces concurrently
 	// downloaded. No more than len(requests) pieces
 	// are downloaded at a time.
-	requests [10]atomic.Pointer[pendingPiece]
+	requests [4]atomic.Pointer[pendingPiece]
 	// The wait group is used when spawning download related goroutines.
 	wg sync.WaitGroup
 	// Download related signaling. When the torrent
@@ -91,7 +91,7 @@ type Upload struct {
 	// Requests are the number of maximum requests
 	// that will be handled by the client for any
 	// number of connected leechers.
-	requests [20]atomic.Pointer[timedUploadRequest]
+	requests [10]atomic.Pointer[timedUploadRequest]
 	// The wait group is used when spawning upload related goroutines.
 	wg sync.WaitGroup
 	// Upload related signaling. When the torrent
@@ -169,6 +169,10 @@ func NewTracker(clientID string, logger *slog.Logger, t *torrent.MetaInfoFile, d
 
 	tr.upload.wg.Add(1)
 	go tr.processUploadRequests()
+
+	tr.upload.wg.Add(1)
+	go tr.optimisticUnchoke()
+
 	return &tr, nil
 }
 

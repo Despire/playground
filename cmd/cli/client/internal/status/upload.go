@@ -1,6 +1,7 @@
 package status
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"time"
@@ -12,29 +13,31 @@ import (
 func (t *Tracker) CancelUpload() { close(t.upload.cancel); t.upload.wg.Wait() }
 
 func (t *Tracker) AddLeecher(id string, conn net.Conn) error {
-	//np := peer.NewLeecher(
-	//	t.logger,
-	//	id,
-	//	conn.RemoteAddr().String(),
-	//	t.Torrent.NumPieces(),
-	//	conn,
-	//)
-	//
-	//infoHash := string(t.Torrent.Metadata.Hash[:])
-	//if err := np.SendHandshakeV1(infoHash, t.clientID); err != nil {
-	//	return fmt.Errorf("failed to send handshake: %w", err)
-	//}
-	//
-	//t.peers.leechers.Store(conn.RemoteAddr().String(), np)
-	//
-	//if err := np.SendBitfield(t.BitField.Clone()); err != nil {
-	//	t.peers.leechers.Delete(conn.RemoteAddr().String())
-	//	return fmt.Errorf("failed to send bitfield")
-	//}
-	//
-	//t.upload.wg.Add(2)
-	//go t.keepAliveLeechers(np)
-	//go t.handleRequests(np)
+	np, err := peer.NewLeecherConnection(
+		t.logger,
+		id, conn.RemoteAddr().String(),
+		t.Torrent.NumPieces(),
+		conn,
+		string(t.Torrent.Metadata.Hash[:]), t.clientID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to establish leecher connection")
+	}
+
+	t.peers.leechers.Delete(conn.RemoteAddr().String())
+	t.peers.leechers.Store(conn.RemoteAddr().String(), np)
+
+	if err := np.SendBitfield(t.BitField.Clone()); err != nil {
+		t.peers.leechers.Delete(conn.RemoteAddr().String())
+		return fmt.Errorf("failed to send bitfield: %w", err)
+	}
+
+	r, c := np.Requests()
+
+	t.upload.wg.Add(2)
+	go t.keepAliveLeechers(np)
+	go t.handleRequests(np, r, c)
+
 	return nil
 }
 
@@ -61,6 +64,11 @@ func (t *Tracker) processUploadRequests() {
 				if req == nil {
 					continue
 				}
+				if time.Since(req.recieved) > 15*time.Second {
+					// drop request.
+					t.upload.requests[i].CompareAndSwap(req, nil)
+					continue
+				}
 				t.peers.leechers.Range(func(key, value any) bool {
 					if key.(string) == req.addr {
 						p := value.(*peer.Peer)
@@ -80,6 +88,12 @@ func (t *Tracker) processUploadRequests() {
 							return false
 						}
 						t.upload.requests[i].CompareAndSwap(req, nil)
+
+						newUpload := t.Uploaded.Add(int64(len(b)))
+						t.logger.Debug("uploaded piece",
+							slog.String("piece", fmt.Sprint(req.request.Index)),
+							slog.String("uploaded_bytes", fmt.Sprint(newUpload)),
+						)
 						return false
 					}
 					return true
@@ -154,41 +168,65 @@ func (t *Tracker) handleRequests(p *peer.Peer, requests <-chan *messagesv1.Reque
 
 func (t *Tracker) keepAliveLeechers(p *peer.Peer) {
 	logger := t.logger.With(slog.String("peer_ip", p.Addr), slog.String("pid", p.Id))
-	refresh := time.NewTicker(1 * time.Nanosecond) // first tick happens immediately.
+
+	defer func() {
+		if err := p.Close(); err != nil {
+			logger.Error("failed to close peer", slog.Any("err", err))
+		}
+		t.peers.leechers.Delete(p.Addr)
+		t.upload.wg.Done()
+	}()
+
+	refresh := time.NewTicker(2 * time.Minute)
 	for {
 		select {
 		case <-t.stop:
 			logger.Debug("shutting down peer refresher, stopped tracker")
-			if err := p.Close(); err != nil {
-				logger.Error("failed to close peer", slog.Any("err", err))
-			}
-			t.upload.wg.Done()
 			return
 		case <-t.upload.cancel:
 			logger.Debug("shutting down peer refresher, canceled upload")
-			if err := p.Close(); err != nil {
-				logger.Error("failed to close peer", slog.Any("err", err.Error()))
-			}
-			t.upload.wg.Done()
 			return
 		case <-refresh.C:
 			refresh.Reset(2 * time.Minute)
 			switch s := p.ConnectionStatus(); s {
-			// TODO: connection pending
 			case peer.ConnectionKilled:
 				logger.Info("shutting down peer refresher, connection closed")
-				if err := p.Close(); err != nil {
-					logger.Error("failed to close peer", slog.Any("err", err))
-				}
-				t.peers.leechers.Delete(p.Addr)
-				t.upload.wg.Done()
 				return
 			case peer.ConnectionEstablished:
 				logger.Info("sending keep alive event on torrent peer")
 				if err := p.SendKeepAlive(); err != nil {
 					logger.Error("failed to keep alive", slog.Any("err", err))
+					return
 				}
 			}
+		}
+	}
+}
+
+func (t *Tracker) optimisticUnchoke() {
+	defer t.upload.wg.Done()
+
+	unchoke := time.NewTicker(30 * time.Second)
+	for {
+		select {
+		case <-t.stop:
+			t.logger.Debug("shutting down peer refresher, stopped tracker")
+			return
+		case <-t.upload.cancel:
+			t.logger.Debug("shutting down peer refresher, canceled upload")
+			return
+		case <-unchoke.C:
+			// select random peer to unchoke
+			t.peers.leechers.Range(func(_, value any) bool {
+				p := value.(*peer.Peer)
+				if p.Status.This.Load() == uint32(peer.Choked) && p.Interest.Remote.Load() == uint32(peer.Interested) {
+					if err := p.SendUnchoke(); err != nil {
+						t.logger.Error("failed to unchoke peer", slog.String("end_peer", p.Addr))
+						return false
+					}
+				}
+				return false
+			})
 		}
 	}
 }

@@ -42,12 +42,11 @@ func (t *Tracker) UpdateSeeders(resp *tracker.Response) error {
 
 func (t *Tracker) downloadScheduler() {
 	defer t.download.wg.Done()
-	// pool in random order
-	// TODO: change to rarest piece.
-	unverified := t.BitField.MissingPieces()
-	rand.Shuffle(len(unverified), func(i, j int) {
-		unverified[i], unverified[j] = unverified[j], unverified[i]
-	})
+
+	unverified := make(map[uint32]struct{})
+	for _, i := range t.BitField.MissingPieces() {
+		unverified[i] = struct{}{}
+	}
 
 	currentRate := int64(0)
 	rateTicker := time.NewTicker(rateTick)
@@ -77,7 +76,7 @@ func (t *Tracker) downloadScheduler() {
 
 				// reschedule long running requests.
 				for send := 0; send < len(p.InFlight); send++ {
-					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 15*time.Second {
+					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 7*time.Second {
 						t.peers.seeders.Range(func(_, value any) bool {
 							p := value.(*peer.Peer)
 							canCancel := p.ConnectionStatus() == peer.ConnectionEstablished
@@ -180,13 +179,31 @@ func (t *Tracker) downloadScheduler() {
 				continue
 			}
 
-			pieceStart := int64(unverified[0]) * t.Torrent.PieceLength
+			index := int64(-1)
+			// find the next missing piece that can be downloaded
+			for unverified := range unverified {
+				t.peers.seeders.Range(func(_, value any) bool {
+					p := value.(*peer.Peer)
+					if p.Bitfield.Check(unverified) {
+						index = int64(unverified)
+						return false
+					}
+					return true
+				})
+			}
+
+			if index < 0 {
+				// no peers available for any piece to download
+				continue
+			}
+
+			pieceStart := index * t.Torrent.PieceLength
 			pieceEnd := pieceStart + t.Torrent.PieceLength
 			pieceEnd = min(pieceEnd, t.Torrent.BytesToDownload())
 			pieceSize := pieceEnd - pieceStart
 
 			pending := &pendingPiece{
-				Index:      unverified[0],
+				Index:      uint32(index),
 				Downloaded: 0,
 				Size:       pieceSize,
 				Received:   nil,
@@ -213,7 +230,7 @@ func (t *Tracker) downloadScheduler() {
 				continue // slot was taken away.
 			}
 
-			unverified = unverified[1:]
+			delete(unverified, uint32(index))
 		}
 	}
 }
