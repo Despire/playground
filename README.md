@@ -9,6 +9,10 @@ Tinytorrent is a dead simple implementation of the bittorrent v1.0 specification
 The client functions as both a downloader and an uploader, employing an optimistic unchoking strategy with connected leechers. However, it is constrained by static download and upload rates, which do not fully utilize the available bandwidth or accommodate the increasing TCP window size between connected peers,
 as its meant to be a toy implementation.
 
+The client can handle both single file and multi file torrents.
+
+NOTE: only a small handful free non-copyrighted has been tested, so there may be cases which are not handled. Magnet links are also not supported.
+
 # Example
 
 Below is an example of using the client to download the latest non-copyrighted [debian.iso](./torrent/test_data/debian.torrent), 
