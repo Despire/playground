@@ -76,7 +76,7 @@ func (t *Tracker) downloadScheduler() {
 
 				// reschedule long running requests.
 				for send := 0; send < len(p.InFlight); send++ {
-					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 7*time.Second {
+					if req := p.InFlight[send]; !req.received && time.Since(req.send) > 8*time.Second {
 						t.peers.seeders.Range(func(_, value any) bool {
 							p := value.(*peer.Peer)
 							canCancel := p.ConnectionStatus() == peer.ConnectionEstablished
@@ -164,6 +164,7 @@ func (t *Tracker) downloadScheduler() {
 					close(t.download.completed)
 					return
 				}
+				time.Sleep(250 * time.Millisecond)
 				continue
 			}
 
@@ -176,6 +177,7 @@ func (t *Tracker) downloadScheduler() {
 			}
 			if slot < 0 {
 				// no free slot
+				time.Sleep(250 * time.Millisecond)
 				continue
 			}
 
@@ -194,6 +196,7 @@ func (t *Tracker) downloadScheduler() {
 
 			if index < 0 {
 				// no peers available for any piece to download
+				time.Sleep(5 * time.Second)
 				continue
 			}
 
