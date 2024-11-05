@@ -91,7 +91,7 @@ type Upload struct {
 	// Requests are the number of maximum requests
 	// that will be handled by the client for any
 	// number of connected leechers.
-	requests [10]atomic.Pointer[timedUploadRequest]
+	requests [50]atomic.Pointer[timedUploadRequest]
 	// The wait group is used when spawning upload related goroutines.
 	wg sync.WaitGroup
 	// Upload related signaling. When the torrent

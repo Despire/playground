@@ -64,11 +64,6 @@ func (t *Tracker) processUploadRequests() {
 				if req == nil {
 					continue
 				}
-				if time.Since(req.recieved) > 15*time.Second {
-					// drop request.
-					t.upload.requests[i].CompareAndSwap(req, nil)
-					continue
-				}
 				t.peers.leechers.Range(func(key, value any) bool {
 					if key.(string) == req.addr {
 						p := value.(*peer.Peer)
