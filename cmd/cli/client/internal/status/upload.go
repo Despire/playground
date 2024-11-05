@@ -219,8 +219,9 @@ func (t *Tracker) optimisticUnchoke() {
 						t.logger.Error("failed to unchoke peer", slog.String("end_peer", p.Addr))
 						return false
 					}
+					return false
 				}
-				return false
+				return true
 			})
 		}
 	}
