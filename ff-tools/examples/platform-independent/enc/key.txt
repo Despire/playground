@@ -1,0 +1,16 @@
+key: 7f1fdd10225b9daaaa17af78b73b0d07243c9ac9d656ce1eac146f4376a9d4cc
+iv:  79b525f9e79f6eb9133d1d3d3a900073
+
+
+openssl enc -aes-256-cbc -d -in hidden\(wasm-pdf-zip\).pdf -out decrypted.txt -K 7f1fdd10225b9daaaa17af78b73b0d07243c9ac9d656ce1eac146f4376a9d4cc -iv 79b525f9e79f6eb9133d1d3d3a900073 -nosalt -nopad -p
+
+
+
+
+
+---------- png -----------
+key: 7f1fdd10225b9daaaa17af78b73b0d07243c9ac9d656ce1eac146f4376a9d4cc
+iv:  f08418d3eb9574b313fb1b15239c020c
+
+
+openssl enc -aes-256-cbc -d -in ./hidden-png.pdf -out decrypted.png -K 7f1fdd10225b9daaaa17af78b73b0d07243c9ac9d656ce1eac146f4376a9d4cc -iv f08418d3eb9574b313fb1b15239c020c -nosalt -nopad -p

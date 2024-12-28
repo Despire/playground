@@ -1,0 +1,37 @@
+\documentclass[fontsize=11pt,twocolumn]{article}
+
+\usepackage{setspace}
+\onehalfspacing
+
+\usepackage{pdfpages}
+\usepackage[
+    backend=bibtex,
+    sortcites=true,
+    sorting=ynt,
+    abbreviate=false,
+    style=numeric,
+    citestyle=numeric,
+    isbn=true,
+    url=false,
+    doi=false]{biblatex}
+\addbibresource{bibliography.bib}
+
+\title{\textbf{Creating Polyglot Files}}
+\author{Matus Mrekaj}
+\date{12 Dec 2022}
+
+\begin{document}
+\maketitle
+
+\textbf{\input{abstract.tex}}
+\input{01.tex}
+\input{02.tex}
+\input{03.tex}
+\input{04.tex}
+\input{05.tex}
+
+\begin{spacing}{1}
+    \printbibliography
+\end{spacing}
+
+\end{document}

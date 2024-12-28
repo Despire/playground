@@ -1,0 +1,17 @@
+\section{Conclusion}
+
+I've tried creating multiple Polyglot files that still work today with the latest software. There are some catches though.
+Adobe Acrobat Reader (which directly follows the spec of PDF) doesn't consider the PDF polyglots as valid anymore and has been
+improved over the last decade to disallow opening polyglot files within it. However other PDF viewers such as Preview on MacOS or
+Document Viewer on linux have no problem with these polyglots whatsoever including browsers such as Safari or Firefox. The same is true for mobile devices 
+such as Iphone or Remarkable Tablet.
+
+Creating Polyglots files that work on MacOs is a bit more harder to do. Especially if you want to create a polyglot with a binary of some sort
+as MacOs requires the binaries to be signed and its a bit harder to distribute polyglots with self-signed certificates, it's doabble just harder.
+Also MacOS has some protection for Zip files, it requires that nothing starts before the ZIP file itself, so if you just try to insert a single byte
+it will just straight reject it, however if you use the command-line to unzip a polyglot is still works.
+
+Further, Google Chrome has also protection agains opening polyglots that contain some sort of binary data. I've tried this and chrome just rejects them.
+
+I haven't encountered any issues with polyglots on Linux. I'm not sure if they'll work on windows as I haven't targeted windows as the primary OS, though I believe
+some of them if not most would also work.

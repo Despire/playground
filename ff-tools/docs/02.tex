@@ -1,0 +1,26 @@
+\section{Techniques to create Polyglot Files}
+The techniques that I've used to created the polyglot files were inspired from parts of the presentation
+given by Ange Albertini where he introduced 4 types of polyglot file creation namely, Cavities, Concatanation (or stacking), Parasites and
+Zippers\cite{Ange-Albertini}.
+
+\subsection{Concatanation, Stacks}
+Concatanation is the simplest form of creating a polyglot, it's simply appending the the second file at the end of the first one.
+Any offsets or pointers or references in the contents of the second file must be adjusted to new positions, this first file is left untouched.
+The requirment for this is that the second file doesn't enforce $Magic$ $Number$ at offset 0 of its contents. As we have talked that file format specifications
+are not perfect, there exist a few of formats that allow this.
+
+\subsection{Cavities}
+Cavities are a bit harder to create as the idea of it is that in order to create a Polyglot file we use padded, unused zero-filled memory
+within the first file. Usually this is the case for executables, such as ELF, Mach-O or ROMs or ISOs. It can happen that there exists enough
+zero-filled static memory that could fit a whole another file and again any offsets pointers or reference within the second file would need to be
+adjusted \cite{Ange2}.
+
+\subsection{Zippers}
+Zippers are the more complicated way of creating Polyglots out of the other options. The idea is that the two files are sliced up into
+pieces and merged together by making use of the Metadata or Comment blocks of both file formats. One of the files must have the requirment
+that the header can start later than at offset 0. In both files the references pointers and offsets would need to be adjusted \cite{Ange2}.
+
+\subsection{Parasites}
+Parasites are very similar to Cavities, but instead of using zero-filled unused memory we abuse the spec of the file format by hiding
+the second file within the first file, by using Metadata or Comments tags that are allowed by the specifications. These block or tags aren't displayed
+to the user when the file is being read. Usually they are limited in size which varries across the file formats.

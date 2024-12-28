@@ -1,0 +1,32 @@
+\section{A Polyglot File}
+A file is a resource identified by its name, the contents of which are an array of bytes\cite{File}. 
+A file is essentially a sequence of bytes that has no meaning in itself until it is interpreted by a program that recognizes and can interpret that sequence of bytes. 
+A polyglot file is a sequence of bytes that, when given to different programs, each of them interprets it differently. To give an example, consider a sequence of bytes representing PDF and ZIP files. 
+When a PDF is given to a reader, it looks for bytes from which it can assemble the PDF. When given to a ZIP parser
+it looks for bytes that made up a ZIP. A polyglot file can be crafted such that it can be interpreted by multiple programs as valid.
+We'll explore creating such files in later sections.
+
+But, how does a program know that it's reading a ZIP or a PDF? 
+There are a number of file format specifications that have been around since the inception of the computer. 
+The program looks at a sequence of bytes and determines the type of file format not based on the file's suffix, but on the byte header,
+know as a $Magic Number$ \footnote{A constant value used to identify file type \url{https://en.wikipedia.org/wiki/Magic_number_(programming)}} \cite{PolyglotFile}.
+For example, on MacOS the default app to view file types is Preview. It supports a number of image file formats as well as PDF \cite{Preview}. Since it supports multiple file formats it looks for the
+$Magic Number$ based on the suffix of the file that is requeted to be opened. Given a PDF is will look for the \%PDF sequence of bytes that identifies a PDF, for a PNG it will look for $89$ $50$ $4e$ $47$ $0d$ $0a$ $1a$ $0a$.
+It will then read the contents until an EOF marker that's again specific for the given file format specification.
+
+\subsection{Why is it possible to create Polyglot Files?}
+File format specifications are created by individuals or companies; there is no standard committee that approves the file format \cite{Ange-Albertini}.
+Therefore, the specifications are incomplete and there are ways of using them in ways that have not been considered at all. These will be discussed later when explaining the various file formats.
+
+\section{Creating Polyglot Files}
+By having the possibility of creating polyglot files that act as one format where in reality it's a different format, play a important role for
+possibly bypassing the security measures of systems, propagating malware, or generally hid malicious code within a file that could be left undetected.
+
+You may be asking how could this be a potential threat, the answer to it is: it depends. A system is secure as its weakest link and many systems
+aren't build for security from the start, it only becomes a priority much later or worse when a breach is detected. To give a some real examples that
+actually happened very recently, Rockstar Games and Uber both got hacked within a time span of 1 week of each other by social engineering \cite{Uber, Rockstar}.
+
+Distributing a polyglot file containing malicious code could be just the first step,
+followed by execution through social engineering or other means that are disposable. 
+Polyglot files just enable another point of attack on the system because the end users do not know the contents of the file or do not care about it,
+they just want to open it, I am guilty of this myself.
