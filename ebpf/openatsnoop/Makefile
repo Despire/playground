@@ -1,4 +1,5 @@
 all:
+	sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 	clang -target bpf -c openatsnoop.bpf.c -g -O2
 	llvm-strip -g openatsnoop.bpf.o
 	sudo bpftool gen skeleton openatsnoop.bpf.o > openatsnoop.skel.h
