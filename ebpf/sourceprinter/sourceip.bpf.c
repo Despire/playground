@@ -17,14 +17,14 @@ int openat(struct xdp_md *ctx) {
 	struct ethhdr *eth = start;
 	int ethsize = sizeof(struct ethhdr);
 	if (start + ethsize > end) {
-		return 0;
+		return XDP_PASS;
 	}
 
 	if (eth->h_proto == bpf_htons(ETH_P_IP)) {
 		struct iphdr *ip = (start + ethsize);
 		int ipsize = sizeof(struct iphdr);
 		if (start + ethsize + ipsize > end) {
-			return 0;
+			return XDP_PASS;
 		}
 
 		// Print the source IP address in readable format
@@ -38,7 +38,7 @@ int openat(struct xdp_md *ctx) {
 		struct ipv6hdr *ipv6 = (start + ethsize);
 		int ipsize = sizeof(struct ipv6hdr);
 		if (start + ethsize + ipsize > end) {
-			return 0;
+			return XDP_PASS;
 		}
 		// Print the source IP address in readable format
 		bpf_printk("Recieved Source IPv6: %04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x",
