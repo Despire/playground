@@ -20,4 +20,15 @@ Make sure you run these in a separate VM that won't affect your environmnet.
 
 6. Run the program in `sudo` mode, i.e. execute `sudo -i` type password and run the program.
 
+```bash
+# execute bash inside the container
+./container run bash
+```
+
 7. If everything went ok, you should have a bash terminal running in the created tiny "container" it has very limited functionality but you should be able to resolve some hostname with `getent hosts www.google.com`
+
+```bash
+$ getent hosts www.google.com
+
+2a00:1450:4014:80e::2004 www.google.com
+```
