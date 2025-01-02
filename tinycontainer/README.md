@@ -12,7 +12,9 @@ Make sure you run these in a separate VM that won't affect your environmnet.
 
 3. Download the ubuntu docker image `docker pull ubuntu`
 
-4. Move the downloaded layer of the ubuntu image which can be found under `/var/lib/docker/overlay2/<some-hash>` and move its contents to the `./overlay/image` directory
+4. Move the downloaded layer of the ubuntu image which can be found under `/var/lib/docker/overlay2/<some-hash>/diff/` and move its contents to the `./overlay/image` directory
+
+    `cp -r /var/lib/docker/overlay2/<some-hash>/diff/* ./overlay/image`
 
 5. Build the program with `go build .`
 
