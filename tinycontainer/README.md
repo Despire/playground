@@ -32,3 +32,5 @@ $ getent hosts www.google.com
 
 2a00:1450:4014:80e::2004 www.google.com
 ```
+
+[![asciicast](https://asciinema.org/a/da2fhZFKe8OMF7lQ9LiYRT7sO)](https://asciinema.org/a/da2fhZFKe8OMF7lQ9LiYRT7sO)
