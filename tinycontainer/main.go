@@ -307,7 +307,7 @@ func setupContainerNetwork(parent, child netns.NsHandle) (func() error, error) {
 
 	err = netlink.RouteAdd(&netlink.Route{
 		Scope: netlink.SCOPE_UNIVERSE,
-		Gw:    net.ParseIP(gatewayAddr[:len(gatewayAddr-2)]),
+		Gw:    net.ParseIP(gatewayAddr[:len(gatewayAddr)-2]),
 	})
 
 	if err != nil {
